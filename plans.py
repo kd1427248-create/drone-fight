@@ -19,56 +19,82 @@ def _number(word: str, low: float, high: float, integer: bool = True) -> float:
     return value
 
 
+APP_COMMANDS = ("match_height", "flee_far", "land")  # handled by this app, no fixed move
+
+
+def move(pose: tuple, line: str) -> tuple:
+    """Where one command takes the drone: pose = (x forward, y right, z up, heading).
+
+    x/y are cm in the starting frame, heading is degrees clockwise from the
+    starting direction. Raises ValueError for anything the app does not allow.
+    """
+    x, y, z, heading = pose
+    words = line.split()
+    name, args = words[0].lower(), words[1:]
+    if name in MOVES and len(args) == 1:
+        distance = _number(args[0], 20, 500)
+        ahead, side = MOVES[name]
+        rad = math.radians(heading)
+        x += distance * (ahead * math.cos(rad) - side * math.sin(rad))
+        y += distance * (ahead * math.sin(rad) + side * math.cos(rad))
+    elif name in ("up", "down") and len(args) == 1:
+        z += _number(args[0], 20, 500) * (1 if name == "up" else -1)
+    elif name in ("cw", "ccw") and len(args) == 1:
+        heading = (heading + _number(args[0], 1, 360) * (1 if name == "cw" else -1)) % 360
+    elif name == "go" and len(args) == 4:
+        gx, gy, gz = (_number(a, -500, 500) for a in args[:3])
+        _number(args[3], 10, 100)
+        if all(-20 < v < 20 for v in (gx, gy, gz)):
+            raise ValueError
+        # SDK 'go': x forward, y LEFT, z up, relative to the current heading.
+        rad = math.radians(heading)
+        x += gx * math.cos(rad) + gy * math.sin(rad)
+        y += gx * math.sin(rad) - gy * math.cos(rad)
+        z += gz
+    elif name == "speed" and len(args) == 1:
+        _number(args[0], 10, 100)
+    elif name == "flip" and len(args) == 1 and args[0] in ("l", "r", "f", "b"):
+        pass
+    elif name == "delay" and len(args) == 1:
+        _number(args[0], 0.1, 10, integer=False)
+    elif line in APP_COMMANDS:
+        pass
+    else:
+        raise ValueError
+    return (x, y, z, heading)
+
+
+def go_command(dx: float, dy: float, dz: float, heading: float, speed: int) -> str | None:
+    """'go' that moves by (dx forward, dy right, dz up) in the starting frame, or None if tiny."""
+    rad = math.radians(heading)
+    ahead = dx * math.cos(rad) + dy * math.sin(rad)
+    right = -dx * math.sin(rad) + dy * math.cos(rad)
+    parts = [round(max(-500, min(500, v))) for v in (ahead, -right, dz)]  # go's y is LEFT
+    if all(-20 < v < 20 for v in parts):
+        return None
+    return f"go {parts[0]} {parts[1]} {parts[2]} {speed}"
+
+
 def check(text: str) -> dict:
     """Validate a battle file; also report where it ends up and how far it goes."""
     errors, commands = [], []
-    x = y = z = 0.0  # cm in the starting frame: x forward, y right, z up
-    heading = 0  # degrees clockwise from the starting direction
+    pose = (0.0, 0.0, 0.0, 0)
     farthest = 0.0
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#") or line == "repeat":  # files always repeat now
             continue
-        words = line.split()
-        name, args = words[0].lower(), words[1:]
+        name = line.split()[0].lower()
         try:
-            if name in MOVES and len(args) == 1:
-                distance = _number(args[0], 20, 500)
-                ahead, side = MOVES[name]
-                rad = math.radians(heading)
-                x += distance * (ahead * math.cos(rad) - side * math.sin(rad))
-                y += distance * (ahead * math.sin(rad) + side * math.cos(rad))
-            elif name in ("up", "down") and len(args) == 1:
-                z += _number(args[0], 20, 500) * (1 if name == "up" else -1)
-            elif name in ("cw", "ccw") and len(args) == 1:
-                heading = (heading + _number(args[0], 1, 360) * (1 if name == "cw" else -1)) % 360
-            elif name == "go" and len(args) == 4:
-                gx, gy, gz = (_number(a, -500, 500) for a in args[:3])
-                _number(args[3], 10, 100)
-                if all(-20 < v < 20 for v in (gx, gy, gz)):
-                    raise ValueError
-                # SDK 'go': x forward, y LEFT, z up, relative to the current heading.
-                rad = math.radians(heading)
-                x += gx * math.cos(rad) + gy * math.sin(rad)
-                y += gx * math.sin(rad) - gy * math.cos(rad)
-                z += gz
-            elif name == "speed" and len(args) == 1:
-                _number(args[0], 10, 100)
-            elif name == "flip" and len(args) == 1 and args[0] in ("l", "r", "f", "b"):
-                pass
-            elif name == "delay" and len(args) == 1:
-                _number(args[0], 0.1, 10, integer=False)
-            elif line in ("match_height", "land"):
-                pass
-            else:
-                raise ValueError
+            pose = move(pose, line)
         except ValueError:
             message = ("command と takeoff はアプリが自動で行うので書かなくて大丈夫です"
                        if name in ("command", "takeoff") else "使えない命令か、数字が範囲外です")
             errors.append({"line": number, "text": raw, "message": message})
             continue
         commands.append(line)
-        farthest = max(farthest, math.hypot(x, y))
+        farthest = max(farthest, math.hypot(pose[0], pose[1]))
+    x, y, z, heading = pose
     drift = math.hypot(x, y)
     if not commands and not errors:
         errors.append({"line": 0, "text": "", "message": "命令が1つもありません"})

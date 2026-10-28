@@ -37,6 +37,14 @@ def opponent_height() -> int | None:
 
 
 runner.opponent_height = opponent_height
+
+
+def opponent_pos() -> dict | None:
+    others = room_peers()
+    return ((others[0].get("battle") or {}).get("pos")) if others else None
+
+
+runner.opponent_pos = opponent_pos
 # Closing the app must never leave the drone flying.
 atexit.register(runner.shutdown)
 lock = threading.Lock()

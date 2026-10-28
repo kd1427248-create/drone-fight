@@ -26,6 +26,29 @@ def modes() -> list[dict]:
 
 
 MAX_HEIGHT = 180
+# The arena, in cm from each player's own start. Players start facing each other.
+START_DISTANCE = 250  # between the two drones at the start
+ARENA_BACK = 150      # how far behind its start a drone may go
+ARENA_SIDE = 150      # how far left / right
+FLEE_HEIGHTS = (60, 160)
+
+
+def opponent_in_my_frame(their_pos: dict | None) -> tuple[float, float]:
+    """The opponent starts START_DISTANCE ahead, facing us: flip its own position into ours."""
+    if not their_pos:
+        return (START_DISTANCE, 0.0)
+    return (START_DISTANCE - their_pos["x"], -their_pos["y"])
+
+
+def flee_target(opponent: tuple[float, float], opponent_height: int | None) -> tuple[float, float, int]:
+    """The corner of our half of the arena farthest from the opponent, and the height farthest from theirs."""
+    xs = (-ARENA_BACK, START_DISTANCE / 2 - 50)  # never past the middle line
+    ys = (-ARENA_SIDE, ARENA_SIDE)
+    corners = [(x, y) for x in xs for y in ys]
+    x, y = max(corners, key=lambda c: (c[0] - opponent[0]) ** 2 + (c[1] - opponent[1]) ** 2)
+    their_h = opponent_height if opponent_height is not None else 80
+    z = max(FLEE_HEIGHTS, key=lambda h: abs(h - their_h))
+    return (x, y, z)
 
 
 def height_fix(mine: int | None, theirs: int | None) -> str | None:
@@ -78,6 +101,7 @@ class BattleRunner:
         self.monitor = StateMonitor(state_port)
         self.lock = threading.Lock()
         self.opponent_height = lambda: None  # set by the app: opponent's latest height (cm)
+        self.opponent_pos = lambda: None  # set by the app: opponent's own pose {"x","y"} (cm)
         self._reset()
 
     def _reset(self) -> None:
@@ -88,6 +112,7 @@ class BattleRunner:
         self.takeoff_at: float | None = None
         self.down_at: float | None = None
         self.height: int | None = None
+        self.pose = (0.0, 0.0, 0.0, 0)  # where our commands have taken us, from the start
         self.height_at = 0.0  # when the last state packet arrived (monotonic)
         self.moved_at = 0.0   # when the last command finished (monotonic)
         self.tof: int | None = None
@@ -157,7 +182,9 @@ class BattleRunner:
                 self._reset()
 
     def public(self) -> dict:
+        x, y, _, heading = self.pose
         return {"phase": self.phase, "airborne": self.airborne, "down_at": self.down_at,
+                "pos": {"x": round(x), "y": round(y), "heading": round(heading)},
                 "takeoff_at": self.takeoff_at, "height": self.height, "battery": self.battery,
                 "plan": self._plan_label(), "current": self.current}
 
@@ -253,6 +280,14 @@ class BattleRunner:
                 if line.startswith("delay"):
                     self._delay(float(line.split()[1]))
                     continue
+                if line == "flee_far":
+                    deadline = time.monotonic() + 0.6  # wait for a height measured after the last move
+                    while self.height_at <= self.moved_at + 0.1 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    line = self._flee_step()
+                    if line is None:
+                        self._delay(0.4)  # already as far away as we can be: wait and look again
+                        continue
                 if line == "match_height":
                     # Only trust a height measured after the last move, so a stale
                     # reading can never make it climb again and again.
@@ -269,6 +304,11 @@ class BattleRunner:
                     break  # stopped while waiting for a fresh height: send nothing more
                 reply = self._send(line)
                 self.moved_at = time.monotonic()
+                if reply == "ok":
+                    try:
+                        self.pose = plans.move(self.pose, line)
+                    except ValueError:
+                        pass
                 if line == "land":
                     self.stop_reason = "ファイルの land で着陸"
                     return self._finish("landed", self.stop_reason)
@@ -281,6 +321,22 @@ class BattleRunner:
                 else:
                     errors = 0
             # Modes and imported files alike repeat until the battle ends.
+
+    def _flee_step(self) -> str | None:
+        """One 'go' toward the spot farthest from the opponent, or None if we are there."""
+        opponent = opponent_in_my_frame(self.opponent_pos())
+        tx, ty, tz = flee_target(opponent, self.opponent_height())
+        x, y, _, heading = self.pose
+        # Change height only on a reading taken after the last move, and never above the ceiling,
+        # so a stale height can never make it climb again and again.
+        fresh = self.height is not None and self.height_at > self.moved_at + 0.1
+        dz = min(tz - self.height, MAX_HEIGHT - self.height) if fresh else 0
+        command = plans.go_command(tx - x, ty - y, dz, heading, 100)
+        target = (round(tx), round(ty), tz)
+        if command and target != getattr(self, "_flee_target", None):
+            self._flee_target = target
+            self._note(f"逃げる: 相手{tuple(round(v) for v in opponent)} → ({target[0]}, {target[1]}) 高さ{tz}")
+        return command
 
     def _land_now(self) -> None:
         if self.phase == "down":
