@@ -175,6 +175,9 @@ def api_pad_test():
     if action == "emergency":
         tester.emergency()
         return jsonify(ok=True, message="緊急停止を送りました")
+    if action == "move":
+        error = tester.move(str(body.get("command", "")))
+        return jsonify(ok=error is None, message=error or "動かします")
     if runner.phase in ("starting", "flying"):
         return jsonify(ok=False, message="バトル中は試せません")
     if tester.busy():
@@ -184,7 +187,7 @@ def api_pad_test():
         return jsonify(ok=False, message="先に「1. ドローンを探す」で自分の機体にして、この画面に戻ってください")
     if action == "hover":
         tester.start(drone["ip"], "hover")
-        return jsonify(ok=True, message="離陸して、その場でパッドを読みます")
+        return jsonify(ok=True, message="離陸します。読めたらボタンか矢印キーで動かせます")
     if action == "scan":
         try:
             span = int(body.get("span", 80))
