@@ -10,8 +10,6 @@ import tello_net
 
 APP_DIR = Path(__file__).resolve().parent
 MODE_DIR = APP_DIR / "modes"
-FILE_DIR = APP_DIR.parent / "Tello-Python" / "Single_Tello_Test"
-HIDDEN_FILES = {"wifi_setup.txt"}  # holds a Wi-Fi password
 MIN_BATTERY = 30
 MOVE_TIMEOUT = 12
 STATE_PORT = 8890
@@ -25,10 +23,6 @@ def modes() -> list[dict]:
         name, _, description = first.partition(":")
         found.append({"id": path.stem, "name": name.strip(), "description": description.strip()})
     return found
-
-
-def own_files() -> list[str]:
-    return sorted(p.name for p in FILE_DIR.glob("*.txt") if p.name not in HIDDEN_FILES)
 
 
 MAX_HEIGHT = 180
@@ -46,20 +40,31 @@ def height_fix(mine: int | None, theirs: int | None) -> str | None:
     return f"up {step}" if diff > 0 else f"down {step}"
 
 
+def plan_key(plan: dict | None) -> str | None:
+    """'mode:<id>' or 'plan:<file>' — one string the page can compare."""
+    return f"{plan['kind']}:{plan['name']}" if plan else None
+
+
+def choices() -> list[dict]:
+    """Everything a player can pick: the built-in modes, then imported files."""
+    return ([{"key": f"mode:{m['id']}", "title": m["name"], "description": m["description"],
+              "imported": False} for m in modes()]
+            + [{"key": f"plan:{p['name']}", "title": p["title"], "description": p["description"],
+                "imported": True} for p in plans.list_plans()])
+
+
 def plan_lines(kind: str, name: str) -> list[str]:
     if kind == "mode" and name in {m["id"] for m in modes()}:
         path = MODE_DIR / f"{name}.txt"
-    elif kind == "plan" and name in {p["name"] for p in plans.list_plans() if p["ok"]}:
+    elif kind == "plan" and name in {p["name"] for p in plans.list_plans()}:
         path = plans.PLAN_DIR / name
-    elif kind == "file" and name in own_files():
-        path = FILE_DIR / name
     else:
         raise ValueError("unknown plan")
     lines = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         # The runner does command / takeoff itself; 'ap' must never run mid-battle.
-        if line and not line.startswith("#") and line not in ("command", "takeoff", plans.REPEAT) \
+        if line and not line.startswith("#") and line not in ("command", "takeoff", "repeat") \
                 and not line.startswith("ap "):
             lines.append(line)
     return lines
@@ -103,10 +108,15 @@ class BattleRunner:
         threading.Thread(target=self._run, daemon=True).start()
         threading.Thread(target=self._watch_state, daemon=True).start()
 
-    def set_mode(self, mode_id: str) -> bool:
-        if self.phase != "flying" or mode_id not in {m["id"] for m in modes()}:
+    def set_mode(self, kind: str, name: str) -> bool:
+        """Switch to another mode or imported file mid-battle."""
+        if self.phase != "flying":
             return False
-        self.plan = {"kind": "mode", "name": mode_id}
+        try:
+            plan_lines(kind, name)
+        except ValueError:
+            return False
+        self.plan = {"kind": kind, "name": name}
         self._note(f"モード変更: {self._plan_label()}")
         return True
 
@@ -152,20 +162,16 @@ class BattleRunner:
                 "plan": self._plan_label(), "current": self.current}
 
     def details(self) -> dict:
-        return {**self.public(), "log": self.log[-12:], "mode_id": (self.plan or {}).get("name")
-                if (self.plan or {}).get("kind") == "mode" else None}
+        return {**self.public(), "log": self.log[-12:], "plan_key": plan_key(self.plan)}
 
     # ---- internals ---------------------------------------------------------
-    @staticmethod
-    def _repeats(plan: dict) -> bool:
-        return plans.check((plans.PLAN_DIR / plan["name"]).read_text(encoding="utf-8"))["repeat"]
-
     def _plan_label(self) -> str:
         if not self.plan:
             return ""
         if self.plan["kind"] == "mode":
             return next((m["name"] for m in modes() if m["id"] == self.plan["name"]), self.plan["name"])
-        return self.plan["name"]
+        return next((p["title"] for p in plans.list_plans() if p["name"] == self.plan["name"]),
+                    self.plan["name"])
 
     def _note(self, text: str) -> None:
         self.log.append(time.strftime("%H:%M:%S ") + text)
@@ -274,13 +280,7 @@ class BattleRunner:
                         return
                 else:
                     errors = 0
-            loops = plan["kind"] == "mode" or (plan["kind"] == "plan" and self._repeats(plan))
-            if not loops and self.plan == plan and self.phase == "flying" \
-                    and not self.stop_event.is_set():
-                # A file runs once; then hover (and keep the link alive) until the end.
-                self._note("ファイルの最後まで実行。ホバリングして待ちます")
-                while not self.stop_event.is_set() and self.phase == "flying" and self.plan == plan:
-                    self._delay(4)
+            # Modes and imported files alike repeat until the battle ends.
 
     def _land_now(self) -> None:
         if self.phase == "down":

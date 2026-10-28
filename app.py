@@ -108,31 +108,14 @@ def peers_page():
     return render_template("peers.html", page="peers")
 
 
-@app.get("/plans")
-def plans_page():
-    return render_template("plans.html", page="plans", help=plans.HELP)
-
-
-@app.get("/api/plans")
-def api_plans():
-    return jsonify(plans=plans.list_plans())
-
-
-@app.get("/api/plans/read")
-def api_plans_read():
-    text = plans.read_plan(request.args.get("name", ""))
-    return (jsonify(text=text) if text is not None else (jsonify(text=""), 404))
-
-
-@app.post("/api/plans/check")
-def api_plans_check():
-    return jsonify(plans.check(str(request.get_json().get("text", ""))))
-
-
-@app.post("/api/plans/save")
-def api_plans_save():
+@app.post("/api/import")
+def api_import():
+    """A .txt the player picked on their PC; the page sends its name and text."""
     body = request.get_json()
-    return jsonify(plans.save_plan(str(body.get("name", "")), str(body.get("text", ""))))
+    result = plans.import_plan(str(body.get("filename", "")), str(body.get("text", "")))
+    if result["ok"] and not state["start_at"]:
+        state["plan"] = {"kind": "plan", "name": result["name"]}  # choose it right away
+    return jsonify(result)
 
 
 @app.post("/api/plans/delete")
@@ -172,9 +155,8 @@ def api_state():
         battle_seconds=BATTLE_SECONDS,
         result=state["result"],
         me=runner.details(),
-        modes=battle.modes(),
-        own_files=battle.own_files(),
-        my_plans=[p for p in plans.list_plans() if p["ok"]],
+        choices=battle.choices(),
+        plan_key=battle.plan_key(state["plan"]),
         code=tello_net.load_settings().get("code", ""),
         missing=missing_setup(),
         player=tello_net.load_settings().get("player", ""),
@@ -281,7 +263,7 @@ def api_plan():
     try:
         battle.plan_lines(plan["kind"], plan["name"])
     except ValueError:
-        return jsonify(ok=False, message="そのモード・ファイルは使えません")
+        return jsonify(ok=False, message="その作戦は使えません")
     if state["start_at"]:
         return jsonify(ok=False, message="バトルが始まってからは変えられません（モードは下のボタンで切り替え）")
     state["plan"] = plan
@@ -315,7 +297,8 @@ def api_ready():
 
 @app.post("/api/mode")
 def api_mode():
-    return jsonify(ok=runner.set_mode(str(request.get_json().get("name"))))
+    kind, _, name = str(request.get_json().get("key", "")).partition(":")
+    return jsonify(ok=runner.set_mode(kind, name))
 
 
 @app.post("/api/surrender")

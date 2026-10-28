@@ -32,16 +32,10 @@
   <!-- before the battle: choose a mode or a file, then get ready -->
   <section class="card" id="setup">
     <h2>作戦を選ぶ</h2>
-    <div class="tabs">
-      <button class="tab on" data-tab="mode">モード</button>
-      <button class="tab" data-tab="file">自分のファイル</button>
-    </div>
     <div id="mode-list" class="mode-grid"></div>
-    <div id="file-pick" hidden>
-      <select id="file"></select>
-      <pre class="mono muted" id="file-preview"></pre>
-      <p class="muted" style="margin:0">「くり返す」付きのファイルはバトルが終わるまでくり返し、それ以外は最後まで行ったらその場でホバリングします。ファイルは上の「<a href="{{ url_for('plans_page') }}">作戦ファイル</a>」で作れます。</p>
-    </div>
+    <input type="file" id="import-file" accept=".txt,text/plain" hidden>
+    <div class="import-result" id="import-result"></div>
+    <p class="muted" style="margin:10px 0 0;font-size:13px">インポートするのは、1行に1つ命令を書いた <code>.txt</code> です（例: <code>forward 100</code>、<code>cw 180</code>、<code>match_height</code>）。4つのモードと同じく、バトルが終わるまでくり返します。<code>takeoff</code> はアプリが自動で行います。</p>
     <p class="room-status" id="room-status"></p>
     <div class="row" style="justify-content:center">
       <button id="ready" class="big-button">準備OK</button>

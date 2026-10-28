@@ -13,7 +13,6 @@
   <nav class="steps">
     <a href="{{ url_for('drones_page') }}" class="{{ 'on' if page == 'drones' }}">1. ドローンを探す</a>
     <a href="{{ url_for('peers_page') }}" class="{{ 'on' if page == 'peers' }}">2. マッチング</a>
-    <a href="{{ url_for('plans_page') }}" class="setup {{ 'on' if page == 'plans' }}">作戦ファイル</a>
     <a href="{{ url_for('router_page') }}" class="setup {{ 'on' if page == 'router' }}">設定</a>
   </nav>
   {% block content %}{% endblock %}

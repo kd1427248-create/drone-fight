@@ -129,8 +129,6 @@ function fillSelect(select, options) {
 }
 
 // ---- battle room ----
-let tab = "mode";
-let lastFile = "";
 const STATE_TEXT = { idle: "待機中", starting: "離陸中…", flying: "飛行中", down: "地面に落ちた", landed: "着陸" };
 
 function setPlayerCard(prefix, name, drone, ready) {
@@ -145,20 +143,62 @@ function setPlayerCard(prefix, name, drone, ready) {
 
 function renderModes(s) {
   const box = $("mode-list");
-  const sig = JSON.stringify([s.modes, s.plan]);
+  const sig = JSON.stringify([s.choices, s.plan_key, s.ready]);
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   box.innerHTML = "";
-  for (const m of s.modes) {
-    const b = document.createElement("button");
-    const chosen = s.plan && s.plan.kind === "mode" && s.plan.name === m.id;
-    b.className = "mode-card" + (chosen ? " on" : "");
-    b.innerHTML = "<b></b><span></span>";
-    b.children[0].textContent = m.name;
-    b.children[1].textContent = m.description;
-    b.addEventListener("click", () => choosePlan("mode", m.id));
-    box.appendChild(b);
+  for (const c of s.choices) {
+    const card = document.createElement("div");
+    card.className = "mode-card" + (c.key === s.plan_key ? " on" : "") + (c.imported ? " imported" : "");
+    card.tabIndex = 0;
+    card.innerHTML = "<b></b><span></span>";
+    card.children[0].textContent = c.title;
+    card.children[1].textContent = c.description;
+    const choose = () => choosePlan(...splitPlan(c.key));
+    card.addEventListener("click", choose);
+    card.addEventListener("keydown", (e) => { if (e.key === "Enter") choose(); });
+    if (c.imported && !s.ready) {
+      const remove = document.createElement("button");
+      remove.className = "remove";
+      remove.title = "このファイルを外す";
+      remove.textContent = "×";
+      remove.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm("「" + c.title + "」を外しますか？")) return;
+        await post("/api/plans/delete", { name: splitPlan(c.key)[1] });
+        box.dataset.sig = "";
+        refresh();
+      });
+      card.appendChild(remove);
+    }
+    box.appendChild(card);
   }
+  const add = document.createElement("button");
+  add.className = "mode-card import-card";
+  add.innerHTML = "<b>＋ ファイルをインポート</b><span>自分で書いた .txt を読み込む</span>";
+  add.addEventListener("click", () => $("import-file").click());
+  box.appendChild(add);
+}
+
+async function importFile(file) {
+  const result = $("import-result");
+  result.innerHTML = "";
+  const text = await file.text();
+  const r = await post("/api/import", { filename: file.name, text });
+  const head = document.createElement("p");
+  head.className = r.ok ? "ok-text" : "error";
+  head.textContent = r.ok
+    ? "「" + file.name + "」を読み込みました ✓（命令" + r.commands + "個・一番遠くて" + r.farthest + "cm）"
+    : "「" + file.name + "」は使えません:";
+  result.appendChild(head);
+  for (const e of r.errors || []) {
+    const p = document.createElement("p");
+    p.className = "error";
+    p.textContent = (e.line ? e.line + "行目「" + e.text.trim() + "」: " : "") + e.message;
+    result.appendChild(p);
+  }
+  $("mode-list").dataset.sig = "";
+  refresh();
 }
 
 async function choosePlan(kind, name) {
@@ -167,15 +207,7 @@ async function choosePlan(kind, name) {
   refresh();
 }
 
-async function showFile(value) {
-  if (!value || value === lastFile) return;
-  lastFile = value;
-  const [kind, name] = splitPlan(value);
-  const r = await (await fetch("/api/plan_text?kind=" + kind + "&name=" + encodeURIComponent(name))).json();
-  $("file-preview").textContent = r.lines.join("\n");
-}
-
-// The file list holds "plan:<name>" (made in this app) and "file:<name>" (class files).
+// Choices are "mode:<id>" (built in) or "plan:<file>" (imported).
 function splitPlan(value) {
   const i = value.indexOf(":");
   return [value.slice(0, i), value.slice(i + 1)];
@@ -204,20 +236,8 @@ function renderBattle(s) {
 
   if (!started) {
     renderModes(s);
-    $("mode-list").hidden = tab !== "mode";
-    $("file-pick").hidden = tab !== "file";
-    for (const t of document.querySelectorAll(".tab")) t.classList.toggle("on", t.dataset.tab === tab);
-    const fileOptions = [["", "ファイルを選んでください"]]
-      .concat(s.my_plans.map((p) => ["plan:" + p.name, p.name + (p.repeat ? "（くり返す）" : "")]))
-      .concat(s.own_files.map((f) => ["file:" + f, "授業: " + f]));
-    if (fillSelect($("file"), fileOptions) && s.plan && s.plan.kind !== "mode") {
-      $("file").value = s.plan.kind + ":" + s.plan.name;
-    }
-    showFile($("file").value);
-    const planText = !s.plan ? "モードかファイルを選んでください"
-      : s.plan.kind === "mode" ? "作戦: " + (s.modes.find((m) => m.id === s.plan.name) || {}).name
-      : "作戦: " + s.plan.name;
-    for (const id of ["file"]) $(id).disabled = s.ready;
+    const chosen = s.choices.find((c) => c.key === s.plan_key);
+    const planText = chosen ? "作戦: " + chosen.title : "作戦を選んでください";
     $("mode-list").classList.toggle("locked", s.ready);
     $("ready").textContent = s.ready ? "準備OKを取り消す" : "準備OK";
     $("ready").className = "big-button" + (s.ready ? " ghost" : "");
@@ -239,16 +259,16 @@ function renderBattle(s) {
   $("op-state").textContent = droneState(opponent.battle);
   $("op-plan").textContent = opponent.battle && opponent.battle.plan ? "作戦: " + opponent.battle.plan : "";
   const switcher = $("mode-switch");
-  const sig = JSON.stringify([s.modes, s.me.mode_id, s.me.phase]);
+  const sig = JSON.stringify([s.choices, s.me.plan_key, s.me.phase]);
   if (switcher.dataset.sig !== sig) {
     switcher.dataset.sig = sig;
     switcher.innerHTML = "";
-    for (const m of s.modes) {
+    for (const c of s.choices) {
       const b = document.createElement("button");
-      b.textContent = m.name;
-      b.className = m.id === s.me.mode_id ? "" : "ghost";
+      b.textContent = c.title;
+      b.className = c.key === s.me.plan_key ? "" : "ghost";
       b.disabled = s.me.phase !== "flying";
-      b.addEventListener("click", () => post("/api/mode", { name: m.id }).then(refresh));
+      b.addEventListener("click", () => post("/api/mode", { key: c.key }).then(refresh));
       switcher.appendChild(b);
     }
   }
@@ -302,12 +322,10 @@ if (page === "peers") {
   });
 }
 if (page === "battle") {
-  for (const t of document.querySelectorAll(".tab")) {
-    t.addEventListener("click", () => { tab = t.dataset.tab; refresh(); });
-  }
-  $("file").addEventListener("change", () => {
-    showFile($("file").value);
-    if ($("file").value) choosePlan(...splitPlan($("file").value));
+  $("import-file").addEventListener("change", () => {
+    const file = $("import-file").files[0];
+    if (file) importFile(file);
+    $("import-file").value = "";  // picking the same file again still triggers
   });
   $("ready").addEventListener("click", async () => {
     const r = await post("/api/ready", { ready: $("ready").textContent === "準備OK" });
@@ -332,127 +350,6 @@ if (page === "battle") {
   });
   setInterval(refresh, 300);  // smoother countdown and live state
 }
-if (page === "plans") {
-  let current = "";  // file being edited ("" = new)
-  let checkTimer = null;
-
-  const textWithRepeat = () => {
-    // The checkbox is the "repeat" line, so keep exactly one at the top when checked.
-    const body = $("plan-text").value.split("\n").filter((l) => l.trim() !== "repeat").join("\n");
-    return ($("plan-repeat").checked ? "repeat\n" : "") + body;
-  };
-
-  async function loadList() {
-    const r = await (await fetch("/api/plans")).json();
-    const list = $("plan-list");
-    list.innerHTML = "";
-    if (!r.plans.length) list.innerHTML = '<li class="muted">まだありません</li>';
-    for (const p of r.plans) {
-      const li = document.createElement("li");
-      const b = document.createElement("button");
-      b.className = "plan-item" + (p.name === current ? " on" : "");
-      b.textContent = p.name.replace(/\.txt$/, "") + (p.repeat ? " 🔁" : "") + (p.ok ? "" : " ⚠");
-      b.addEventListener("click", () => openPlan(p.name));
-      li.appendChild(b);
-      list.appendChild(li);
-    }
-  }
-
-  async function openPlan(name) {
-    const r = await (await fetch("/api/plans/read?name=" + encodeURIComponent(name))).json();
-    current = name;
-    $("plan-name").value = name.replace(/\.txt$/, "");
-    const lines = r.text.split("\n");
-    $("plan-repeat").checked = lines.some((l) => l.trim() === "repeat");
-    $("plan-text").value = lines.filter((l) => l.trim() !== "repeat").join("\n").replace(/\n+$/, "");
-    $("delete-plan").hidden = false;
-    $("plan-msg").textContent = "";
-    checkPlan();
-    loadList();
-  }
-
-  async function checkPlan() {
-    const r = await post("/api/plans/check", { text: textWithRepeat() });
-    const box = $("plan-check");
-    box.innerHTML = "";
-    const summary = document.createElement("p");
-    const end = r.end;
-    summary.textContent = "命令 " + r.commands + "個 ／ 一番遠くて " + r.farthest + "cm ／ 最後は元の位置から" +
-      (r.drift ? "前" + end.forward + "・右" + end.right + "cm（" + r.drift + "cmずれる）" : "ずれなし") +
-      (end.heading ? "、向きは右回り" + end.heading + "度" : "");
-    summary.className = "muted";
-    box.appendChild(summary);
-    for (const e of r.errors) {
-      const p = document.createElement("p");
-      p.className = "error";
-      p.textContent = (e.line ? e.line + "行目「" + e.text.trim() + "」: " : "") + e.message;
-      box.appendChild(p);
-    }
-    if (r.ok) {
-      const p = document.createElement("p");
-      p.className = "ok-text";
-      p.textContent = "OK！ このまま保存できます";
-      box.appendChild(p);
-    }
-  }
-
-  const scheduleCheck = () => { clearTimeout(checkTimer); checkTimer = setTimeout(checkPlan, 300); };
-  $("plan-text").addEventListener("input", scheduleCheck);
-  $("plan-repeat").addEventListener("change", checkPlan);
-
-  $("new-plan").addEventListener("click", () => {
-    current = "";
-    $("plan-name").value = "";
-    $("plan-text").value = "";
-    $("plan-repeat").checked = false;
-    $("delete-plan").hidden = true;
-    $("plan-msg").textContent = "";
-    $("plan-check").innerHTML = "";
-    loadList();
-    $("plan-name").focus();
-  });
-
-  $("save-plan").addEventListener("click", async () => {
-    const r = await post("/api/plans/save", { name: $("plan-name").value, text: textWithRepeat() });
-    if (r.ok) {
-      // Saving under a new name keeps the old file; tell the player which one was written.
-      current = r.name;
-      $("delete-plan").hidden = false;
-      $("plan-msg").className = "msg";
-      $("plan-msg").textContent = "「" + r.name + "」を保存しました ✓";
-      loadList();
-    } else {
-      $("plan-msg").className = "msg error";
-      $("plan-msg").textContent = r.errors.map((e) => (e.line ? e.line + "行目: " : "") + e.message).join(" ／ ");
-    }
-  });
-
-  $("delete-plan").addEventListener("click", async () => {
-    if (!current || !confirm("「" + current + "」を消しますか？")) return;
-    const r = await post("/api/plans/delete", { name: current });
-    if (!r.ok) { $("plan-msg").textContent = r.message || "消せませんでした"; return; }
-    $("new-plan").click();
-    $("plan-msg").textContent = "消しました";
-  });
-
-  for (const b of document.querySelectorAll("[data-insert]")) {
-    b.addEventListener("click", () => {
-      const command = b.dataset.insert;
-      if (command === "repeat") { $("plan-repeat").checked = true; checkPlan(); return; }
-      const area = $("plan-text");
-      const before = area.value.slice(0, area.selectionStart);
-      const after = area.value.slice(area.selectionEnd);
-      const sep = before && !before.endsWith("\n") ? "\n" : "";
-      area.value = before + sep + command + "\n" + after;
-      area.focus();
-      const pos = (before + sep + command + "\n").length;
-      area.setSelectionRange(pos, pos);
-      scheduleCheck();
-    });
-  }
-  loadList();
-}
-
 if (page === "router" || page === "drones") {
   // Remember the Wi-Fi name (never the password) for the next Tello.
   try { $("ssid").value = localStorage.getItem("ssid") || ""; } catch (e) { /* storage blocked */ }
