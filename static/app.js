@@ -31,13 +31,13 @@ function renderDrones(s) {
   $("scan-msg").textContent = s.message + (s.scanned_at ? "（" + s.scanned_at + "）" : "");
   if (editing) return;
   $("drones").innerHTML = s.drones.length ? "" :
-    '<tr><td colspan="5" class="muted">' +
+    '<tr><td colspan="4" class="muted">' +
     (s.scanned_at ? "見つかりませんでした。電源・Wi-Fiを確認してください" : "まだ探していません") + "</td></tr>";
   for (const d of s.drones) {
     const tr = document.createElement("tr");
     tr.innerHTML = '<td><input maxlength="20" placeholder="例: ゆーしん機"><div class="saved muted"></div></td>' +
-      '<td class="mono"></td><td></td><td class="mono muted"></td>' +
-      '<td><button class="ghost">IPをコピー</button></td>';
+      '<td class="mono"></td><td></td>' +
+      '<td><button class="ghost claim"></button></td>';
     const input = tr.querySelector("input");
     const saved = tr.querySelector(".saved");
     input.value = d.name;
@@ -55,9 +55,17 @@ function renderDrones(s) {
     });
     tr.children[1].textContent = d.ssid || "?";
     tr.children[1].title = "IP " + d.ip;
-    tr.children[2].textContent = d.battery ? d.battery + "%" : "?";
-    tr.children[3].textContent = d.sn;
-    tr.children[4].querySelector("button").addEventListener("click", (e) => copy(d.ip, e.target));
+    tr.children[2].textContent = d.battery ? d.battery + "%" : "—";
+    const mine = s.my_drone && s.my_drone.sn === d.sn;
+    const claim = tr.querySelector(".claim");
+    claim.textContent = mine ? "自分の機体 ✓" : "自分の機体にする";
+    claim.className = mine ? "claim" : "ghost claim";
+    claim.addEventListener("click", async () => {
+      claim.textContent = "つないでいます…";
+      const r = await post("/api/claim", { sn: d.sn });
+      saved.textContent = r.ok ? "" : r.message;
+      refresh();
+    });
     $("drones").appendChild(tr);
   }
 }
@@ -287,7 +295,13 @@ if (page === "battle") {
     refresh();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("live").hidden) post("/api/surrender").then(refresh);
+    if ($("live").hidden) return;
+    // Esc, Ctrl+C, or ⌘C with nothing selected: give up and land.
+    const copyKey = e.key === "c" && (e.ctrlKey || (e.metaKey && !window.getSelection().toString()));
+    if (e.key === "Escape" || copyKey) {
+      e.preventDefault();
+      post("/api/surrender").then(refresh);
+    }
   });
   setInterval(refresh, 300);  // smoother countdown and live state
 }

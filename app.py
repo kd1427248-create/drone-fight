@@ -28,7 +28,7 @@ runner = battle.BattleRunner(
     tello_port=int(os.environ.get("TELLO_PORT", tello_net.TELLO_PORT)),
     state_port=int(os.environ.get("STATE_PORT", battle.STATE_PORT)))
 # Closing the app must never leave the drone flying.
-atexit.register(lambda: runner.land("アプリを終了"))
+atexit.register(runner.shutdown)
 lock = threading.Lock()
 
 
@@ -138,6 +138,11 @@ def run_scan() -> None:
     hosts = os.environ.get("SCAN_HOSTS")  # testing only: e.g. a fake Tello on 127.0.0.1
     drones = tello_net.scan(hosts.split(",") if hosts else None, port=runner.tello_port)
     with lock:
+        # Keep what we already learnt from our own drone (battery, serial).
+        known = {d["sn"]: d for d in state["drones"]}
+        for d in drones:
+            for key in ("battery", "serial"):
+                d[key] = d.get(key) or known.get(d["sn"], {}).get(key)
         state.update(drones=drones, scanning=False, scanned_at=time.strftime("%H:%M:%S"),
                      message=f"{len(drones)}台見つかりました")
 
@@ -172,9 +177,37 @@ def api_match():
         return jsonify(ok=False, message="「" + "」「".join(missing) + "」を入れてください")
     if not re.fullmatch(r"\d{4}", code):
         return jsonify(ok=False, message="合言葉は4桁の数字にしてください")
+    message = claim_drone(serial)
+    if message:
+        return jsonify(ok=False, message=message)
     tello_net.save_settings(player=player, drone_sn=serial, code=code)
     state.update(matching=True, ready=False)
     peers.announce()
+    return jsonify(ok=True)
+
+
+def claim_drone(drone_id: str) -> str | None:
+    """Connect to the player's own drone only; returns an error message or None."""
+    with lock:
+        drone = next((d for d in state["drones"] if d["sn"] == drone_id), None)
+    if drone is None:
+        return "そのドローンが見つかっていません。「1. ドローンを探す」で探してください"
+    info = tello_net.claim(drone["ip"], runner.tello_port)
+    if info is None:
+        return ("ドローンから返事がありません。ほかのPCが先につないだかもしれません。"
+                "Telloの電源を入れ直して、もう一度押してください")
+    with lock:
+        drone.update(info)
+    return None
+
+
+@app.post("/api/claim")
+def api_claim():
+    drone_id = str(request.get_json().get("sn", ""))
+    message = claim_drone(drone_id)
+    if message:
+        return jsonify(ok=False, message=message)
+    tello_net.save_settings(drone_sn=drone_id)
     return jsonify(ok=True)
 
 

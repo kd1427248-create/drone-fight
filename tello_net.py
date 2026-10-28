@@ -99,36 +99,76 @@ def talk(ip: str, commands: list[str], timeout: float = 5,
     return replies[1:]
 
 
-def tello_ssid(ip: str) -> str | None:
-    """A Tello's own Wi-Fi name is TELLO- plus the last 3 bytes of its MAC."""
+# MAC address prefixes seen on Tello / Tello EDU units.
+TELLO_OUIS = {"48:1c:b9", "34:d2:62", "60:60:1f"}
+
+
+def arp_table() -> dict[str, str]:
+    """IP -> MAC (lower case, zero-padded) from this PC's ARP cache."""
     try:
-        out = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=2).stdout
+        out = subprocess.run(["arp", "-an"], capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    match = re.search(r"at ((?:[0-9a-f]{1,2}:){5}[0-9a-f]{1,2})", out, re.IGNORECASE)
-    if not match:
-        return None
-    last3 = match.group(1).split(":")[-3:]
-    return "TELLO-" + "".join(part.zfill(2) for part in last3).upper()
+        return {}
+    table = {}
+    for ip, mac in re.findall(r"\(([\d.]+)\) at ((?:[0-9a-f]{1,2}:){5}[0-9a-f]{1,2})", out, re.I):
+        table[ip] = ":".join(part.zfill(2) for part in mac.lower().split(":"))
+    return table
+
+
+def ssid_from_mac(mac: str) -> str:
+    """A Tello's own Wi-Fi name is TELLO- plus the last 3 bytes of its MAC."""
+    return "TELLO-" + "".join(mac.split(":")[-3:]).upper()
+
+
+def tello_ssid(ip: str) -> str | None:
+    mac = arp_table().get(ip)
+    return ssid_from_mac(mac) if mac else None
 
 
 def scan(hosts: list[str] | None = None, wait: float = 2.5, port: int = TELLO_PORT) -> list[dict]:
-    """Ask every address on this /24 network for 'command'; Tellos answer 'ok'."""
-    if hosts is None:
-        me = local_ip()
-        # Unknown network: still try the Tello's fixed address.
-        if me is None or network_mode(me) == "direct":
-            hosts = [DIRECT_IP]
-        else:
-            network = ipaddress.ip_network(f"{me}/24", strict=False)
-            hosts = [str(h) for h in network.hosts() if str(h) != me]
+    """List the Tellos on this network WITHOUT talking to them.
+
+    A Tello only answers the first PC that sends it 'command', so sending
+    'command' to every drone would grab the other player's drone too. Instead
+    each address gets a harmless packet (so its MAC lands in the ARP cache) and
+    Tellos are picked out by MAC prefix. Only the player's own drone is ever
+    sent SDK commands (see claim()).
+    """
+    me = local_ip()
+    if hosts is None and (me is None or network_mode(me) == "direct"):
+        # On a Tello's own Wi-Fi there is exactly one drone, and it is ours.
+        return probe([DIRECT_IP], wait, port)
+    if hosts is not None:
+        return probe(hosts, wait, port)  # testing: fake Tellos that have no real MAC
+    network = ipaddress.ip_network(f"{me}/24", strict=False)
+    targets = [str(h) for h in network.hosts() if str(h) != me]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for _ in range(2):  # the first packet can be dropped while ARP resolves
+            for host in targets:
+                try:
+                    sock.sendto(b"", (host, 9))  # port 9 = discard; Tellos ignore it
+                except OSError:
+                    pass
+            time.sleep(wait / 2)
+    finally:
+        sock.close()
+    drones = []
+    for ip, mac in sorted(arp_table().items(), key=lambda item: ipaddress.ip_address(item[0])):
+        if mac[:8] in TELLO_OUIS and ip in targets:
+            ssid = ssid_from_mac(mac)
+            drones.append({"ip": ip, "sn": ssid, "ssid": ssid, "battery": None, "serial": None})
+    return drones
+
+
+def probe(hosts: list[str], wait: float = 2.5, port: int = TELLO_PORT) -> list[dict]:
+    """Find Tellos by sending 'command' (only where every drone found is ours)."""
     sock = tello_socket(0.1)
     found: set[str] = set()
     deadline = time.monotonic() + wait
     resend_at = time.monotonic() + wait / 3
     try:
         for round_ in range(2):
-            # The first packet to a new address can be lost while ARP resolves.
             for host in hosts:
                 if host not in found:
                     try:
@@ -148,8 +188,18 @@ def scan(hosts: list[str] | None = None, wait: float = 2.5, port: int = TELLO_PO
     drones = []
     for ip in sorted(found, key=ipaddress.ip_address):
         serial, battery = talk(ip, ["sn?", "battery?"], 2, port)
-        drones.append({"ip": ip, "sn": serial or ip, "battery": battery, "ssid": tello_ssid(ip)})
+        ssid = tello_ssid(ip)
+        drones.append({"ip": ip, "sn": ssid or serial or ip, "ssid": ssid, "battery": battery,
+                       "serial": serial})
     return drones
+
+
+def claim(ip: str, port: int = TELLO_PORT) -> dict | None:
+    """Become this drone's controller and read its battery; None if it does not answer."""
+    serial, battery = talk(ip, ["sn?", "battery?"], 3, port)
+    if serial is None and battery is None:
+        return None
+    return {"serial": serial, "battery": battery}
 
 
 def is_ip(text: str) -> bool:

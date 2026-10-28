@@ -97,6 +97,22 @@ class BattleRunner:
         self.stop_event.set()
         self._raw("stop")  # cut the current move short; the run thread then lands
 
+    def shutdown(self) -> None:
+        """The app is closing: land right here, since the run thread dies with the app."""
+        if self.phase not in ("starting", "flying"):
+            return
+        self.stop_reason = "アプリを終了"
+        self.stop_event.set()
+        sock = self.sock or tello_net.tello_socket(0.5)
+        self.sock = sock
+        self._raw("stop")
+        time.sleep(0.3)
+        # Repeat in case a packet is lost or the drone is still finishing a move.
+        for _ in range(5):
+            self._raw("land")
+            time.sleep(0.4)
+        self._note("アプリ終了のため着陸を送りました")
+
     def emergency(self) -> None:
         self.stop_reason = "緊急停止"
         self.stop_event.set()
