@@ -141,43 +141,66 @@ function setPlayerCard(prefix, name, drone, ready) {
   $(prefix + "-ready").className = "ready-badge" + (ready ? " on" : "");
 }
 
+function choiceCard(c, s, onPick) {
+  const card = document.createElement("div");
+  card.className = "mode-card" + (c.key === s.plan_key ? " on" : "") + (c.imported ? " imported" : "");
+  card.tabIndex = 0;
+  card.innerHTML = "<b></b><span></span>";
+  card.children[0].textContent = c.title;
+  card.children[1].textContent = c.description;
+  card.addEventListener("click", onPick);
+  card.addEventListener("keydown", (e) => { if (e.key === "Enter") onPick(); });
+  return card;
+}
+
 function renderModes(s) {
-  const box = $("mode-list");
+  // Main screen: the two kinds, with the chosen one highlighted.
+  const chosen = s.choices.find((c) => c.key === s.plan_key);
+  $("open-modes").classList.toggle("on", !!chosen && !chosen.imported);
+  $("open-import").classList.toggle("on", !!chosen && chosen.imported);
+  $("open-modes").disabled = $("open-import").disabled = s.ready;
+  $("chosen").textContent = chosen ? "選んだ作戦: " + chosen.title : "まだ選んでいません";
+
   const sig = JSON.stringify([s.choices, s.plan_key, s.ready]);
-  if (box.dataset.sig === sig) return;
-  box.dataset.sig = sig;
-  box.innerHTML = "";
-  for (const c of s.choices) {
-    const card = document.createElement("div");
-    card.className = "mode-card" + (c.key === s.plan_key ? " on" : "") + (c.imported ? " imported" : "");
-    card.tabIndex = 0;
-    card.innerHTML = "<b></b><span></span>";
-    card.children[0].textContent = c.title;
-    card.children[1].textContent = c.description;
-    const choose = () => choosePlan(...splitPlan(c.key));
-    card.addEventListener("click", choose);
-    card.addEventListener("keydown", (e) => { if (e.key === "Enter") choose(); });
-    if (c.imported && !s.ready) {
-      const remove = document.createElement("button");
-      remove.className = "remove";
-      remove.title = "このファイルを外す";
-      remove.textContent = "×";
-      remove.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!confirm("「" + c.title + "」を外しますか？")) return;
-        await post("/api/plans/delete", { name: splitPlan(c.key)[1] });
-        box.dataset.sig = "";
-        refresh();
-      });
-      card.appendChild(remove);
-    }
-    box.appendChild(card);
+  if ($("mode-list").dataset.sig === sig) return;
+  $("mode-list").dataset.sig = sig;
+
+  // "4つのタイプ" window
+  const modes = $("mode-list");
+  modes.innerHTML = "";
+  for (const c of s.choices.filter((c) => !c.imported)) {
+    modes.appendChild(choiceCard(c, s, () => pickPlan(c.key, "modes-dialog")));
+  }
+
+  // "ファイルインポート" window: imported files, then the button to add one
+  const files = $("plan-list");
+  files.innerHTML = "";
+  for (const c of s.choices.filter((c) => c.imported)) {
+    const card = choiceCard(c, s, () => pickPlan(c.key, "import-dialog"));
+    const remove = document.createElement("button");
+    remove.className = "remove";
+    remove.title = "このファイルを外す";
+    remove.textContent = "×";
+    remove.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("「" + c.title + "」を外しますか？")) return;
+      await post("/api/plans/delete", { name: splitPlan(c.key)[1] });
+      $("mode-list").dataset.sig = "";
+      refresh();
+    });
+    card.appendChild(remove);
+    files.appendChild(card);
   }
   const add = document.createElement("button");
   add.className = "mode-card import-card";
-  add.innerHTML = "<b>＋ ファイルをインポート</b><span>自分で書いた .txt を読み込む</span>";
+  add.innerHTML = "<b>＋ ファイルを読み込む</b><span>PCの .txt を選ぶ</span>";
   add.addEventListener("click", () => $("import-file").click());
-  box.appendChild(add);
+  files.appendChild(add);
+}
+
+async function pickPlan(key, dialogId) {
+  await choosePlan(...splitPlan(key));
+  $(dialogId).close();
 }
 
 async function importFile(file) {
@@ -198,7 +221,8 @@ async function importFile(file) {
     result.appendChild(p);
   }
   $("mode-list").dataset.sig = "";
-  refresh();
+  await refresh();
+  if (r.ok) setTimeout(() => $("import-dialog").close(), 900);
 }
 
 async function choosePlan(kind, name) {
@@ -325,6 +349,15 @@ if (page === "peers") {
   });
 }
 if (page === "battle") {
+  $("open-modes").addEventListener("click", () => $("modes-dialog").showModal());
+  $("open-import").addEventListener("click", () => { $("import-result").innerHTML = ""; $("import-dialog").showModal(); });
+  for (const b of document.querySelectorAll("[data-close]")) {
+    b.addEventListener("click", () => b.closest("dialog").close());
+  }
+  for (const d of document.querySelectorAll("dialog.picker")) {
+    // Clicking the dim background outside the window closes it.
+    d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
+  }
   $("import-file").addEventListener("change", () => {
     const file = $("import-file").files[0];
     if (file) importFile(file);

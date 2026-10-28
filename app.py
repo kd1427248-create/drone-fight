@@ -21,6 +21,7 @@ import tello_net
 
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True  # screen changes show up without a restart
 state = {"drones": [], "scanned_at": None, "scanning": False, "message": "",
          "matching": False, "ready": False, "plan": None, "start_at": None, "result": None}
 BATTLE_SECONDS = 60
