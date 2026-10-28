@@ -48,6 +48,16 @@ def opponent_pos(lead: float = 0.0) -> dict | None:
 
 
 runner.opponent_pos = opponent_pos
+
+
+def opponent_raw() -> tuple[dict | None, float]:
+    others = room_peers()
+    if not others:
+        return None, 0.0
+    return (others[0].get("battle") or {}).get("pos"), others[0].get("offset", 0)
+
+
+runner.opponent_raw = opponent_raw
 # Closing the app must never leave the drone flying.
 atexit.register(runner.shutdown)
 lock = threading.Lock()

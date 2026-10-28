@@ -1,6 +1,7 @@
 """Fly one battle with the player's own drone and watch whether it is still airborne."""
 
 import math
+import random
 import socket
 import threading
 import time
@@ -109,6 +110,69 @@ def guard_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
     return turn
 
 
+DODGE_LINE = 60     # cm: a charge passing closer than this is a threat
+DODGE_STEP = 80     # cm sideways out of the charge line
+DODGE_BOX = (-100, 50, -100, 100)  # x min, x max, y min, y max where the dodger wanders
+
+
+def path_in_my_frame(their_pos: dict | None, offset: float = 0.0):
+    """The opponent's current move as (now, end) points in our frame, or None if it is not moving."""
+    if not their_pos or not their_pos.get("move"):
+        return None
+    move = their_pos["move"]
+    if tello_net.now() - (move["start"] - offset) >= move["duration"]:
+        return None  # finished (the 'ok' just has not arrived yet)
+    now = opponent_in_my_frame(where_now(their_pos, offset))
+    end = opponent_in_my_frame({"x": move["to"][0], "y": move["to"][1]})
+    return now, end
+
+
+def _segment_distance(px: float, py: float, a: tuple, b: tuple) -> float:
+    vx, vy = b[0] - a[0], b[1] - a[1]
+    length2 = vx * vx + vy * vy
+    t = 0.0 if length2 < 1 else max(0.0, min(1.0, ((px - a[0]) * vx + (py - a[1]) * vy) / length2))
+    return math.hypot(px - (a[0] + vx * t), py - (a[1] + vy * t))
+
+
+def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None) -> tuple[str | None, bool]:
+    """Sidestep out of a charge coming at us, else a small random hop. Returns (command, dodged).
+
+    Random hops never end next to the opponent or on its current path.
+    """
+    x, y, _, heading = me
+    if path:
+        (ax, ay), (bx, by) = path
+        vx, vy = bx - ax, by - ay
+        length = math.hypot(vx, vy)
+        if length >= 1:
+            ux, uy = vx / length, vy / length
+            t = ((x - ax) * ux + (y - ay) * uy) / length  # where along the path we are
+            cx, cy = ax + vx * min(1, max(0, t)), ay + vy * min(1, max(0, t))
+            if 0 < t <= 1.2 and math.hypot(x - cx, y - cy) <= DODGE_LINE:
+                nx, ny = -uy, ux  # across the path
+                side = 1 if (x - cx) * nx + (y - cy) * ny >= 0 else -1
+                for s in (side, -side):  # away from the line, unless that leaves our side
+                    tx, ty = x + s * nx * DODGE_STEP, y + s * ny * DODGE_STEP
+                    if -ARENA_BACK <= tx <= START_DISTANCE / 2 - 50 and -ARENA_SIDE <= ty <= ARENA_SIDE:
+                        return plans.go_command(tx - x, ty - y, 0, heading, 100), True
+    # No threat: wander in small random hops so a 1-second-ahead aim keeps missing.
+    x_min, x_max, y_min, y_max = DODGE_BOX
+    for _ in range(20):
+        angle = rng.uniform(0, 2 * math.pi)
+        hop = rng.uniform(30, 50)
+        tx, ty = x + hop * math.cos(angle), y + hop * math.sin(angle)
+        if not (x_min <= tx <= x_max and y_min <= ty <= y_max):
+            continue
+        if opponent and math.hypot(tx - opponent[0], ty - opponent[1]) < 80:
+            continue
+        if path and _segment_distance(tx, ty, *path) < 70:
+            continue
+        return plans.go_command(tx - x, ty - y, 0, heading, 100), False
+    # Outside the box (after a dodge): head back toward its middle.
+    mx, my = (x_min + x_max) / 2, (y_min + y_max) / 2
+    return plans.go_command(max(-50, min(50, mx - x)), max(-50, min(50, my - y)), 0, heading, 100), False
+
+
 def where_now(their_pos: dict | None, offset: float = 0.0, lead: float = 0.0) -> dict | None:
     """The opponent's position right now: part way along the move it is making, if any.
 
@@ -195,6 +259,7 @@ class BattleRunner:
         self.lock = threading.Lock()
         self.opponent_height = lambda: None  # set by the app: opponent's latest height (cm)
         self.opponent_pos = lambda lead=0.0: None  # set by the app: opponent's pose {"x","y"} (cm)
+        self.opponent_raw = lambda: (None, 0.0)  # set by the app: opponent's pos (with move) and clock offset
         self._reset()
 
     def _reset(self) -> None:
@@ -385,6 +450,15 @@ class BattleRunner:
                     continue
                 if line.startswith("speed ") and self.speed_set and line == f"speed {self.speed}":
                     continue  # already flying at this speed: no need to send it every loop
+                if line == "dodge":
+                    raw, offset = self.opponent_raw()
+                    line, dodged = dodge_step(self.pose, path_in_my_frame(raw, offset),
+                                              opponent=opponent_in_my_frame(where_now(raw, offset)))
+                    if dodged:
+                        self._note("回避: 相手の突進の線から横へ")
+                    if line is None:
+                        self._wait_watching()
+                        continue
                 if line == "guard":
                     steps = self._guard_plan()
                     if steps:
