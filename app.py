@@ -313,6 +313,24 @@ def api_emergency():
     return jsonify(ok=True)
 
 
+@app.post("/api/reset")
+def api_reset():
+    """Page reload = start over: forget the code, found drones, match and battle.
+
+    Drone nicknames, the player name and imported files stay. Nothing is reset
+    while the drone is in the air.
+    """
+    if runner.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="飛んでいる間はリセットしません")
+    runner.reset()
+    with lock:
+        state.update(drones=[], scanned_at=None, scanning=False, message="", matching=False,
+                     ready=False, plan=None, start_at=None, result=None)
+    tello_net.save_settings(code="", drone_sn="")
+    peers.announce()
+    return jsonify(ok=True)
+
+
 @app.post("/api/rematch")
 def api_rematch():
     if runner.phase in ("starting", "flying"):

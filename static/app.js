@@ -283,7 +283,10 @@ function renderBattle(s) {
   }
 }
 
+let started = false;  // no screen updates until a reload's reset has finished
+
 async function refresh() {
+  if (!started) return;
   let s;
   try { s = await (await fetch("/api/state")).json(); } catch (e) { return; }
   renderHeader(s);
@@ -365,5 +368,8 @@ if (page === "router" || page === "drones") {
   });
 }
 
-refresh();
+// A reload (not moving between screens) starts everything over.
+const navigation = performance.getEntriesByType("navigation")[0];
+const startUp = navigation && navigation.type === "reload" ? post("/api/reset") : Promise.resolve();
+startUp.then(() => { started = true; refresh(); });
 setInterval(refresh, 1500);

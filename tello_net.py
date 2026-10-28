@@ -13,6 +13,9 @@ import uuid
 from pathlib import Path
 
 TELLO_PORT = 8889
+# The local port we send from. A second copy on the same PC (a dummy opponent
+# for practice) sets TELLO_LOCAL_PORT=0 so it never takes 8889 from the real one.
+LOCAL_PORT = int(os.environ.get("TELLO_LOCAL_PORT", TELLO_PORT))
 DIRECT_IP = "192.168.10.1"  # every Tello's address on its own TELLO-xxxx Wi-Fi
 PEER_PORT = 47474
 # TELLO_CONNECT_DATA lets two copies of the app run side by side (for testing).
@@ -64,7 +67,7 @@ def tello_socket(timeout: float) -> socket.socket:
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.bind(("", TELLO_PORT))
+        sock.bind(("", LOCAL_PORT))
     except OSError:
         sock.bind(("", 0))
     sock.settimeout(timeout)
