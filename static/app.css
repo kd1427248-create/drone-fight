@@ -111,3 +111,5 @@
   .result-title.lose { color: #d92d20; }
   .result-title.draw { color: var(--muted); }
   button.stop { background: #d92d20; color: #fff; }
+
+  .error { color: #d92d20; font-weight: 600; }

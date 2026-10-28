@@ -30,6 +30,21 @@ def own_files() -> list[str]:
     return sorted(p.name for p in FILE_DIR.glob("*.txt") if p.name not in HIDDEN_FILES)
 
 
+MAX_HEIGHT = 180
+
+
+def height_fix(mine: int | None, theirs: int | None) -> str | None:
+    """The up/down command that brings us to the opponent's height (60-180 cm), if needed."""
+    if mine is None or theirs is None:
+        return None
+    target = max(60, min(MAX_HEIGHT, theirs))
+    diff = target - mine
+    if abs(diff) < 20:
+        return None
+    step = min(abs(diff), 100)
+    return f"up {step}" if diff > 0 else f"down {step}"
+
+
 def plan_lines(kind: str, name: str) -> list[str]:
     if kind == "mode" and name in {m["id"] for m in modes()}:
         path = MODE_DIR / f"{name}.txt"
@@ -52,8 +67,9 @@ class BattleRunner:
 
     def __init__(self, tello_port: int = tello_net.TELLO_PORT, state_port: int = STATE_PORT) -> None:
         self.tello_port = tello_port
-        self.state_port = state_port
+        self.monitor = StateMonitor(state_port)
         self.lock = threading.Lock()
+        self.opponent_height = lambda: None  # set by the app: opponent's latest height (cm)
         self._reset()
 
     def _reset(self) -> None:
@@ -64,6 +80,8 @@ class BattleRunner:
         self.takeoff_at: float | None = None
         self.down_at: float | None = None
         self.height: int | None = None
+        self.height_at = 0.0  # when the last state packet arrived (monotonic)
+        self.moved_at = 0.0   # when the last command finished (monotonic)
         self.tof: int | None = None
         self.battery: str | None = None
         self.current = ""
@@ -222,7 +240,22 @@ class BattleRunner:
                 if line.startswith("delay"):
                     self._delay(float(line.split()[1]))
                     continue
+                if line == "match_height":
+                    # Only trust a height measured after the last move, so a stale
+                    # reading can never make it climb again and again.
+                    deadline = time.monotonic() + 0.6
+                    while self.height_at <= self.moved_at + 0.1 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    fresh = self.height_at > self.moved_at + 0.1
+                    line = height_fix(self.height, self.opponent_height()) if fresh else None
+                    if line is None:
+                        continue
+                if line.startswith("up ") and (self.height or 0) + int(line.split()[1]) > MAX_HEIGHT + 20:
+                    continue  # never climb far above the arena ceiling
+                if self.stop_event.is_set():
+                    break  # stopped while waiting for a fresh height: send nothing more
                 reply = self._send(line)
+                self.moved_at = time.monotonic()
                 if line == "land":
                     self.stop_reason = "ファイルの land で着陸"
                     return self._finish("landed", self.stop_reason)
@@ -258,39 +291,70 @@ class BattleRunner:
         self._note(reason)
 
     def _watch_state(self) -> None:
-        """Tello state packets: on the ground (h≈0) for 1 s while 'flying' = knocked down."""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            sock.bind(("", self.state_port))
-        except OSError:
+        """On the ground (h≈0) for 1 s while 'flying' = knocked down."""
+        if not self.monitor.listening:
             self._note("高さの情報を受け取れません（8890番が使用中）")
             return
-        sock.settimeout(0.5)
         ground_since = None
+        seen = 0.0
+        while self.phase in ("starting", "flying"):
+            time.sleep(0.05)
+            reading = self.monitor.latest.get(self.ip)
+            if not reading or reading["at"] == seen:
+                continue
+            seen = reading["at"]
+            if reading["h"] is None or reading["tof"] is None:
+                continue
+            self.height, self.tof, self.height_at = reading["h"], reading["tof"], reading["at"]
+            self.battery = reading["bat"] or self.battery
+            on_ground = self.height <= 10 and self.tof <= 30
+            settled = self.takeoff_at and tello_net.now() - self.takeoff_at > 3
+            if self.phase == "flying" and on_ground and settled:
+                ground_since = ground_since or time.monotonic()
+                if time.monotonic() - ground_since > 1.0 and not self.stop_event.is_set():
+                    self.stop_event.set()
+                    self._finish("down", "地面に落ちました")
+            else:
+                ground_since = None
+
+
+class StateMonitor:
+    """Always listen for Tello state packets (sent ~10 times a second to the PC
+    that sent 'command'), so battery and height are live even outside a battle."""
+
+    def __init__(self, port: int = STATE_PORT) -> None:
+        self.latest: dict[str, dict] = {}
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            while self.phase in ("starting", "flying"):
+            self.sock.bind(("", port))
+            self.listening = True
+        except OSError:
+            self.listening = False
+            return
+        self.sock.settimeout(0.5)
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self) -> None:
+        while True:
+            try:
+                data, source = self.sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            fields = dict(item.split(":", 1) for item in data.decode("ascii", "replace").split(";")
+                          if ":" in item)
+
+            def number(key):
                 try:
-                    data, source = sock.recvfrom(2048)
-                except socket.timeout:
-                    continue
-                if source[0] != self.ip:
-                    continue
-                fields = dict(item.split(":", 1) for item in data.decode("ascii", "replace").split(";")
-                              if ":" in item)
-                try:
-                    self.height = int(fields.get("h", ""))
-                    self.tof = int(fields.get("tof", ""))
-                except ValueError:
-                    continue
-                self.battery = fields.get("bat", self.battery)
-                on_ground = self.height <= 10 and self.tof <= 30
-                settled = self.takeoff_at and tello_net.now() - self.takeoff_at > 3
-                if self.phase == "flying" and on_ground and settled:
-                    ground_since = ground_since or time.monotonic()
-                    if time.monotonic() - ground_since > 1.0 and not self.stop_event.is_set():
-                        self.stop_event.set()
-                        self._finish("down", "地面に落ちました")
-                else:
-                    ground_since = None
-        finally:
-            sock.close()
+                    return int(fields[key])
+                except (KeyError, ValueError):
+                    return None
+            self.latest[source[0]] = {"h": number("h"), "tof": number("tof"),
+                                      "bat": fields.get("bat"), "at": time.monotonic()}
+
+    def battery(self, ip: str | None, max_age: float = 3) -> str | None:
+        reading = self.latest.get(ip or "")
+        if reading and time.monotonic() - reading["at"] < max_age:
+            return reading["bat"]
+        return None

@@ -8,6 +8,11 @@ async function post(url, body) {
   return res.json();
 }
 
+function batteryText(battery) {
+  if (!battery) return "—";
+  return battery + "%" + (Number(battery) < 30 ? "（離陸不可）" : "");
+}
+
 function droneLabel(d) { return (d.name || "名前なし") + "（" + (d.ssid || d.ip) + "）"; }
 
 async function copy(text, button) {
@@ -55,16 +60,20 @@ function renderDrones(s) {
     });
     tr.children[1].textContent = d.ssid || "?";
     tr.children[1].title = "IP " + d.ip;
-    tr.children[2].textContent = d.battery ? d.battery + "%" : "—";
+    tr.children[2].textContent = batteryText(d.battery);
+    tr.children[2].className = d.battery && Number(d.battery) < 30 ? "error" : "";
     const mine = s.my_drone && s.my_drone.sn === d.sn;
     const claim = tr.querySelector(".claim");
     claim.textContent = mine ? "自分の機体 ✓" : "自分の機体にする";
     claim.className = mine ? "claim" : "ghost claim";
     claim.addEventListener("click", async () => {
       claim.textContent = "つないでいます…";
+      claim.disabled = true;
+      editing = true;  // keep this row (and its message) while waiting
       const r = await post("/api/claim", { sn: d.sn });
-      saved.textContent = r.ok ? "" : r.message;
-      refresh();
+      saved.className = r.ok ? "saved muted" : "saved error";
+      saved.textContent = r.ok ? "つなぎました ✓" : r.message;
+      setTimeout(() => { editing = false; refresh(); }, r.ok ? 800 : 6000);
     });
     $("drones").appendChild(tr);
   }
@@ -128,7 +137,8 @@ function setPlayerCard(prefix, name, drone, ready) {
   $(prefix + "-name").textContent = name || "名前なし";
   $(prefix + "-drone").textContent = drone ? (drone.name || "名前なし") : "ドローン未選択";
   $(prefix + "-ssid").textContent = drone && drone.ssid ? drone.ssid : "Wi-Fi名 未確認";
-  $(prefix + "-battery").textContent = drone && drone.battery ? "電池 " + drone.battery + "%" : "電池 ?";
+  $(prefix + "-battery").textContent = "電池 " + batteryText(drone && drone.battery);
+  $(prefix + "-battery").className = drone && drone.battery && Number(drone.battery) < 30 ? "error" : "muted";
   $(prefix + "-ready").textContent = ready ? "準備OK" : "準備中…";
   $(prefix + "-ready").className = "ready-badge" + (ready ? " on" : "");
 }
@@ -263,8 +273,14 @@ if (page === "peers") {
     }
   });
   $("match").addEventListener("click", async () => {
+    // Connecting to the drone takes up to a few seconds: show it, and block double clicks.
+    $("match").disabled = true;
+    $("match-msg").className = "msg";
+    $("match-msg").textContent = "ドローンにつないでいます…";
     const r = await post("/api/match", { player: $("player").value, sn: $("my-drone").value,
                                          code: $("code").value });
+    $("match").disabled = false;
+    $("match-msg").className = r.ok ? "msg" : "msg error";
     $("match-msg").textContent = r.ok ? "" : r.message;
     refresh();
   });

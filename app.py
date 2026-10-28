@@ -27,6 +27,14 @@ COUNTDOWN_SECONDS = 5
 runner = battle.BattleRunner(
     tello_port=int(os.environ.get("TELLO_PORT", tello_net.TELLO_PORT)),
     state_port=int(os.environ.get("STATE_PORT", battle.STATE_PORT)))
+
+
+def opponent_height() -> int | None:
+    others = room_peers()
+    return ((others[0].get("battle") or {}).get("height")) if others else None
+
+
+runner.opponent_height = opponent_height
 # Closing the app must never leave the drone flying.
 atexit.register(runner.shutdown)
 lock = threading.Lock()
@@ -39,8 +47,10 @@ def my_drone() -> dict | None:
         return None
     with lock:
         found = next((d for d in state["drones"] if d["sn"] == serial), {})
+    # Live battery from the drone's state stream, else the last value we read.
+    battery = runner.monitor.battery(found.get("ip")) or found.get("battery")
     return {"sn": serial, "name": tello_net.load_names().get(serial, ""),
-            "ip": found.get("ip"), "ssid": found.get("ssid"), "battery": found.get("battery")}
+            "ip": found.get("ip"), "ssid": found.get("ssid"), "battery": battery}
 
 
 def missing_setup() -> list[str]:
@@ -107,7 +117,9 @@ def api_state():
     ip = tello_net.local_ip()
     names = tello_net.load_names()
     with lock:
-        drones = [{**d, "name": names.get(d["sn"], "")} for d in state["drones"]]
+        drones = [{**d, "name": names.get(d["sn"], ""),
+                   "battery": runner.monitor.battery(d["ip"]) or d.get("battery")}
+                  for d in state["drones"]]
         snapshot = {key: state[key] for key in ("scanned_at", "scanning", "message")}
     return jsonify(
         local_ip=ip,
