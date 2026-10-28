@@ -31,25 +31,20 @@
 
   <!-- before the battle: choose a mode or a file, then get ready -->
   <section class="card" id="setup">
-    <h2>作戦を選ぶ</h2>
-    <div class="pick-kind">
-      <button class="kind-button" id="open-modes"><b>4つのタイプ</b><span>攻め・逃げ・守り・回避</span></button>
-      <button class="kind-button" id="open-import"><b>ファイルインポート</b><span>自分で書いた .txt</span></button>
+    <div class="picker-head">
+      <h2>作戦を選ぶ</h2>
+      <div class="segment" role="tablist">
+        <button role="tab" data-view="modes" class="on">4つのタイプ</button>
+        <button role="tab" data-view="import">ファイルインポート</button>
+      </div>
     </div>
-    <p class="chosen" id="chosen"></p>
-
-    <dialog id="modes-dialog" class="picker">
-      <div class="picker-head"><h2>4つのタイプ</h2><button class="ghost close" data-close>閉じる</button></div>
-      <div id="mode-list" class="mode-grid"></div>
-    </dialog>
-
-    <dialog id="import-dialog" class="picker">
-      <div class="picker-head"><h2>ファイルインポート</h2><button class="ghost close" data-close>閉じる</button></div>
+    <div id="mode-list" class="mode-grid"></div>
+    <div id="import-view" hidden>
       <div id="plan-list" class="mode-grid"></div>
       <input type="file" id="import-file" accept=".txt,text/plain" hidden>
       <div class="import-result" id="import-result"></div>
       <p class="muted" style="margin:12px 0 0;font-size:13px">1行に1つ命令を書いた <code>.txt</code> を読み込みます（例: <code>forward 100</code>、<code>cw 180</code>、<code>match_height</code>）。4つのタイプと同じく、バトルが終わるまでくり返します。1行目を <code># 名前: 説明</code> にするとカードに出ます。<code>takeoff</code> はアプリが自動で行います。</p>
-    </dialog>
+    </div>
     <p class="room-status" id="room-status"></p>
     <div class="row" style="justify-content:center">
       <button id="ready" class="big-button">準備OK</button>

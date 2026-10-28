@@ -153,30 +153,41 @@ function choiceCard(c, s, onPick) {
   return card;
 }
 
+let view = null;  // "modes" or "import": which list the top-right switch shows
+
+function showView(name) {
+  view = name;
+  for (const b of document.querySelectorAll(".segment button")) {
+    b.classList.toggle("on", b.dataset.view === name);
+    b.setAttribute("aria-selected", String(b.dataset.view === name));
+  }
+  $("mode-list").hidden = name !== "modes";
+  $("import-view").hidden = name !== "import";
+}
+
 function renderModes(s) {
-  // Main screen: the two kinds, with the chosen one highlighted.
-  const chosen = s.choices.find((c) => c.key === s.plan_key);
-  $("open-modes").classList.toggle("on", !!chosen && !chosen.imported);
-  $("open-import").classList.toggle("on", !!chosen && chosen.imported);
-  $("open-modes").disabled = $("open-import").disabled = s.ready;
-  $("chosen").textContent = chosen ? "選んだ作戦: " + chosen.title : "まだ選んでいません";
+  if (view === null) {
+    // First time: open the side that holds the current choice.
+    const chosen = s.choices.find((c) => c.key === s.plan_key);
+    showView(chosen && chosen.imported ? "import" : "modes");
+  }
 
   const sig = JSON.stringify([s.choices, s.plan_key, s.ready]);
   if ($("mode-list").dataset.sig === sig) return;
   $("mode-list").dataset.sig = sig;
 
-  // "4つのタイプ" window
+  // 4つのタイプ
   const modes = $("mode-list");
   modes.innerHTML = "";
   for (const c of s.choices.filter((c) => !c.imported)) {
-    modes.appendChild(choiceCard(c, s, () => pickPlan(c.key, "modes-dialog")));
+    modes.appendChild(choiceCard(c, s, () => choosePlan(...splitPlan(c.key))));
   }
 
-  // "ファイルインポート" window: imported files, then the button to add one
+  // ファイルインポート: imported files, then the button to add one
   const files = $("plan-list");
   files.innerHTML = "";
   for (const c of s.choices.filter((c) => c.imported)) {
-    const card = choiceCard(c, s, () => pickPlan(c.key, "import-dialog"));
+    const card = choiceCard(c, s, () => choosePlan(...splitPlan(c.key)));
     const remove = document.createElement("button");
     remove.className = "remove";
     remove.title = "このファイルを外す";
@@ -198,11 +209,6 @@ function renderModes(s) {
   files.appendChild(add);
 }
 
-async function pickPlan(key, dialogId) {
-  await choosePlan(...splitPlan(key));
-  $(dialogId).close();
-}
-
 async function importFile(file) {
   const result = $("import-result");
   result.innerHTML = "";
@@ -221,8 +227,7 @@ async function importFile(file) {
     result.appendChild(p);
   }
   $("mode-list").dataset.sig = "";
-  await refresh();
-  if (r.ok) setTimeout(() => $("import-dialog").close(), 900);
+  refresh();
 }
 
 async function choosePlan(kind, name) {
@@ -263,6 +268,7 @@ function renderBattle(s) {
     const chosen = s.choices.find((c) => c.key === s.plan_key);
     const planText = chosen ? "作戦: " + chosen.title : "作戦を選んでください";
     $("mode-list").classList.toggle("locked", s.ready);
+    $("plan-list").classList.toggle("locked", s.ready);
     $("ready").textContent = s.ready ? "準備OKを取り消す" : "準備OK";
     $("ready").className = "big-button" + (s.ready ? " ghost" : "");
     $("ready").disabled = !s.plan;
@@ -349,14 +355,8 @@ if (page === "peers") {
   });
 }
 if (page === "battle") {
-  $("open-modes").addEventListener("click", () => $("modes-dialog").showModal());
-  $("open-import").addEventListener("click", () => { $("import-result").innerHTML = ""; $("import-dialog").showModal(); });
-  for (const b of document.querySelectorAll("[data-close]")) {
-    b.addEventListener("click", () => b.closest("dialog").close());
-  }
-  for (const d of document.querySelectorAll("dialog.picker")) {
-    // Clicking the dim background outside the window closes it.
-    d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
+  for (const b of document.querySelectorAll(".segment button")) {
+    b.addEventListener("click", () => showView(b.dataset.view));
   }
   $("import-file").addEventListener("change", () => {
     const file = $("import-file").files[0];

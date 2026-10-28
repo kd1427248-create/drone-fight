@@ -119,18 +119,10 @@
   .import-card b { color: var(--accent); }
   .import-result p { margin: 8px 0 0; font-size: 14px; }
 
-  .pick-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 520px) { .pick-kind { grid-template-columns: 1fr; } }
-  .kind-button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 12px;
-                 background: var(--bg); color: var(--text); border: 2px solid var(--line); font-weight: 400; }
-  .kind-button b { font-size: 18px; }
-  .kind-button span { font-size: 13px; color: var(--muted); }
-  .kind-button.on { border-color: var(--accent); background: var(--card); }
-  .kind-button.on b { color: var(--accent); }
-  .chosen { text-align: center; font-weight: 600; margin: 14px 0 0; }
-  dialog.picker { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); border: 1px solid var(--line);
-                  border-radius: 14px; padding: 18px; background: var(--card); color: var(--text); }
-  dialog.picker::backdrop { background: rgba(10, 14, 22, .55); }
   .picker-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .picker-head h2 { margin: 0; }
-  .picker-head .close { padding: 4px 12px; font-size: 13px; }
+  .picker-head { flex-wrap: wrap; gap: 10px; }
+  .segment { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--bg); }
+  .segment button { background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 14px; font-size: 13px; }
+  .segment button.on { background: var(--accent); color: var(--accent-text); }
+  [hidden] { display: none !important; }  /* grids and flex boxes must still hide */
