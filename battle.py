@@ -31,6 +31,24 @@ START_DISTANCE = 250  # between the two drones at the start
 ARENA_BACK = 150      # how far behind its start a drone may go
 ARENA_SIDE = 150      # how far left / right
 FLEE_HEIGHTS = (60, 160)
+FLEE_STEP = 100  # cm per flee move, so it looks at the opponent again at least every second
+
+
+def where_now(their_pos: dict | None, offset: float = 0.0) -> dict | None:
+    """The opponent's position right now: part way along the move it is making, if any.
+
+    A move is sent as {from, to, start, duration}; 'start' is on the opponent's
+    clock, so 'offset' (their clock minus ours) brings it onto ours.
+    """
+    if not their_pos:
+        return None
+    move = their_pos.get("move")
+    if not move:
+        return their_pos
+    elapsed = tello_net.now() - (move["start"] - offset)
+    t = max(0.0, min(1.0, elapsed / max(0.1, move["duration"])))
+    return {"x": move["from"][0] + (move["to"][0] - move["from"][0]) * t,
+            "y": move["from"][1] + (move["to"][1] - move["from"][1]) * t}
 
 
 def opponent_in_my_frame(their_pos: dict | None) -> tuple[float, float]:
@@ -113,6 +131,8 @@ class BattleRunner:
         self.down_at: float | None = None
         self.height: int | None = None
         self.pose = (0.0, 0.0, 0.0, 0)  # where our commands have taken us, from the start
+        self.speed = 100  # cm/s, updated by 'speed' commands
+        self.motion: dict | None = None  # the move in progress, so the opponent can predict us
         self.height_at = 0.0  # when the last state packet arrived (monotonic)
         self.moved_at = 0.0   # when the last command finished (monotonic)
         self.tof: int | None = None
@@ -184,7 +204,7 @@ class BattleRunner:
     def public(self) -> dict:
         x, y, _, heading = self.pose
         return {"phase": self.phase, "airborne": self.airborne, "down_at": self.down_at,
-                "pos": {"x": round(x), "y": round(y), "heading": round(heading)},
+                "pos": {"x": round(x), "y": round(y), "heading": round(heading), "move": self.motion},
                 "takeoff_at": self.takeoff_at, "height": self.height, "battery": self.battery,
                 "plan": self._plan_label(), "current": self.current}
 
@@ -302,13 +322,17 @@ class BattleRunner:
                     continue  # never climb far above the arena ceiling
                 if self.stop_event.is_set():
                     break  # stopped while waiting for a fresh height: send nothing more
+                self._announce_move(line)
                 reply = self._send(line)
+                self.motion = None
                 self.moved_at = time.monotonic()
                 if reply == "ok":
                     try:
                         self.pose = plans.move(self.pose, line)
                     except ValueError:
                         pass
+                    if line.startswith("speed "):
+                        self.speed = int(line.split()[1])
                 if line == "land":
                     self.stop_reason = "ファイルの land で着陸"
                     return self._finish("landed", self.stop_reason)
@@ -322,6 +346,22 @@ class BattleRunner:
                     errors = 0
             # Modes and imported files alike repeat until the battle ends.
 
+    def _announce_move(self, line: str) -> None:
+        """Tell the opponent where this move goes and how long it should take."""
+        try:
+            target = plans.move(self.pose, line)
+        except ValueError:
+            return
+        x, y = self.pose[0], self.pose[1]
+        distance = ((target[0] - x) ** 2 + (target[1] - y) ** 2) ** 0.5
+        if distance < 1:
+            return
+        words = line.split()
+        speed = int(words[4]) if words[0] == "go" else self.speed
+        # About half a second to speed up and slow down on top of the cruise time.
+        self.motion = {"from": [round(x), round(y)], "to": [round(target[0]), round(target[1])],
+                       "start": tello_net.now(), "duration": round(distance / max(10, speed) + 0.5, 2)}
+
     def _flee_step(self) -> str | None:
         """One 'go' toward the spot farthest from the opponent, or None if we are there."""
         opponent = opponent_in_my_frame(self.opponent_pos())
@@ -331,7 +371,11 @@ class BattleRunner:
         # so a stale height can never make it climb again and again.
         fresh = self.height is not None and self.height_at > self.moved_at + 0.1
         dz = min(tz - self.height, MAX_HEIGHT - self.height) if fresh else 0
-        command = plans.go_command(tx - x, ty - y, dz, heading, 100)
+        dx, dy = tx - x, ty - y
+        far = (dx * dx + dy * dy) ** 0.5
+        if far > FLEE_STEP:  # short hops, so a charging opponent is re-checked often
+            dx, dy = dx * FLEE_STEP / far, dy * FLEE_STEP / far
+        command = plans.go_command(dx, dy, dz, heading, 100)
         target = (round(tx), round(ty), tz)
         if command and target != getattr(self, "_flee_target", None):
             self._flee_target = target

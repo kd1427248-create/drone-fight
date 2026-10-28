@@ -40,8 +40,11 @@ runner.opponent_height = opponent_height
 
 
 def opponent_pos() -> dict | None:
+    """Where the opponent is now, predicted along its current move."""
     others = room_peers()
-    return ((others[0].get("battle") or {}).get("pos")) if others else None
+    if not others:
+        return None
+    return battle.where_now((others[0].get("battle") or {}).get("pos"), others[0].get("offset", 0))
 
 
 runner.opponent_pos = opponent_pos
