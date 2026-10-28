@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="plans-layout">
+  <section class="card">
+    <h2>作戦ファイル</h2>
+    <button class="ghost" id="new-plan" style="width:100%">＋ 新しく作る</button>
+    <ul class="plan-list" id="plan-list"></ul>
+    <p class="muted" style="margin:10px 0 0;font-size:13px">作ったファイルは、バトル画面の「自分のファイル」で選ぶだけで使えます。</p>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <label style="flex:1">ファイル名 <input id="plan-name" maxlength="30" placeholder="例: ジグザグ突進" style="width:100%"></label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="plan-repeat"> 最後まで行ったらくり返す</label>
+    </div>
+    <textarea id="plan-text" class="mono" spellcheck="false" rows="14"
+              placeholder="1行に1つずつ命令を書きます。例:&#10;speed 80&#10;forward 150&#10;cw 180&#10;forward 150&#10;cw 180"></textarea>
+    <div class="check" id="plan-check"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="save-plan">保存</button>
+      <button class="ghost" id="delete-plan" hidden>このファイルを消す</button>
+      <span class="msg" id="plan-msg"></span>
+    </div>
+  </section>
+
+  <section class="card plans-help">
+    <h2>使える命令</h2>
+    <p class="muted" style="margin-top:0;font-size:13px">押すと入力欄に入ります。数字は書きかえてください。<code>takeoff</code> はアプリが自動で行います。</p>
+    <div class="help-grid">
+      {% for command, description in help %}
+      <button class="ghost help-item" data-insert="{{ command }}"><code>{{ command }}</code><span>{{ description }}</span></button>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

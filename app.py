@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
+import plans
 import tello_net
 
 
@@ -107,6 +108,41 @@ def peers_page():
     return render_template("peers.html", page="peers")
 
 
+@app.get("/plans")
+def plans_page():
+    return render_template("plans.html", page="plans", help=plans.HELP)
+
+
+@app.get("/api/plans")
+def api_plans():
+    return jsonify(plans=plans.list_plans())
+
+
+@app.get("/api/plans/read")
+def api_plans_read():
+    text = plans.read_plan(request.args.get("name", ""))
+    return (jsonify(text=text) if text is not None else (jsonify(text=""), 404))
+
+
+@app.post("/api/plans/check")
+def api_plans_check():
+    return jsonify(plans.check(str(request.get_json().get("text", ""))))
+
+
+@app.post("/api/plans/save")
+def api_plans_save():
+    body = request.get_json()
+    return jsonify(plans.save_plan(str(body.get("name", "")), str(body.get("text", ""))))
+
+
+@app.post("/api/plans/delete")
+def api_plans_delete():
+    name = str(request.get_json().get("name", ""))
+    if state["plan"] == {"kind": "plan", "name": name} and state["start_at"]:
+        return jsonify(ok=False, message="バトル中のファイルは消せません")
+    return jsonify(ok=plans.delete_plan(name))
+
+
 @app.get("/router")
 def router_page():
     return render_template("router.html", page="router")
@@ -138,6 +174,7 @@ def api_state():
         me=runner.details(),
         modes=battle.modes(),
         own_files=battle.own_files(),
+        my_plans=[p for p in plans.list_plans() if p["ok"]],
         code=tello_net.load_settings().get("code", ""),
         missing=missing_setup(),
         player=tello_net.load_settings().get("player", ""),

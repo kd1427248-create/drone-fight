@@ -167,11 +167,18 @@ async function choosePlan(kind, name) {
   refresh();
 }
 
-async function showFile(name) {
-  if (!name || name === lastFile) return;
-  lastFile = name;
-  const r = await (await fetch("/api/plan_text?kind=file&name=" + encodeURIComponent(name))).json();
+async function showFile(value) {
+  if (!value || value === lastFile) return;
+  lastFile = value;
+  const [kind, name] = splitPlan(value);
+  const r = await (await fetch("/api/plan_text?kind=" + kind + "&name=" + encodeURIComponent(name))).json();
   $("file-preview").textContent = r.lines.join("\n");
+}
+
+// The file list holds "plan:<name>" (made in this app) and "file:<name>" (class files).
+function splitPlan(value) {
+  const i = value.indexOf(":");
+  return [value.slice(0, i), value.slice(i + 1)];
 }
 
 function droneState(b) {
@@ -200,8 +207,12 @@ function renderBattle(s) {
     $("mode-list").hidden = tab !== "mode";
     $("file-pick").hidden = tab !== "file";
     for (const t of document.querySelectorAll(".tab")) t.classList.toggle("on", t.dataset.tab === tab);
-    if (fillSelect($("file"), [["", "ファイルを選んでください"]].concat(s.own_files.map((f) => [f, f])))
-        && s.plan && s.plan.kind === "file") $("file").value = s.plan.name;
+    const fileOptions = [["", "ファイルを選んでください"]]
+      .concat(s.my_plans.map((p) => ["plan:" + p.name, p.name + (p.repeat ? "（くり返す）" : "")]))
+      .concat(s.own_files.map((f) => ["file:" + f, "授業: " + f]));
+    if (fillSelect($("file"), fileOptions) && s.plan && s.plan.kind !== "mode") {
+      $("file").value = s.plan.kind + ":" + s.plan.name;
+    }
     showFile($("file").value);
     const planText = !s.plan ? "モードかファイルを選んでください"
       : s.plan.kind === "mode" ? "作戦: " + (s.modes.find((m) => m.id === s.plan.name) || {}).name
@@ -296,7 +307,7 @@ if (page === "battle") {
   }
   $("file").addEventListener("change", () => {
     showFile($("file").value);
-    if ($("file").value) choosePlan("file", $("file").value);
+    if ($("file").value) choosePlan(...splitPlan($("file").value));
   });
   $("ready").addEventListener("click", async () => {
     const r = await post("/api/ready", { ready: $("ready").textContent === "準備OK" });
@@ -321,6 +332,127 @@ if (page === "battle") {
   });
   setInterval(refresh, 300);  // smoother countdown and live state
 }
+if (page === "plans") {
+  let current = "";  // file being edited ("" = new)
+  let checkTimer = null;
+
+  const textWithRepeat = () => {
+    // The checkbox is the "repeat" line, so keep exactly one at the top when checked.
+    const body = $("plan-text").value.split("\n").filter((l) => l.trim() !== "repeat").join("\n");
+    return ($("plan-repeat").checked ? "repeat\n" : "") + body;
+  };
+
+  async function loadList() {
+    const r = await (await fetch("/api/plans")).json();
+    const list = $("plan-list");
+    list.innerHTML = "";
+    if (!r.plans.length) list.innerHTML = '<li class="muted">まだありません</li>';
+    for (const p of r.plans) {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.className = "plan-item" + (p.name === current ? " on" : "");
+      b.textContent = p.name.replace(/\.txt$/, "") + (p.repeat ? " 🔁" : "") + (p.ok ? "" : " ⚠");
+      b.addEventListener("click", () => openPlan(p.name));
+      li.appendChild(b);
+      list.appendChild(li);
+    }
+  }
+
+  async function openPlan(name) {
+    const r = await (await fetch("/api/plans/read?name=" + encodeURIComponent(name))).json();
+    current = name;
+    $("plan-name").value = name.replace(/\.txt$/, "");
+    const lines = r.text.split("\n");
+    $("plan-repeat").checked = lines.some((l) => l.trim() === "repeat");
+    $("plan-text").value = lines.filter((l) => l.trim() !== "repeat").join("\n").replace(/\n+$/, "");
+    $("delete-plan").hidden = false;
+    $("plan-msg").textContent = "";
+    checkPlan();
+    loadList();
+  }
+
+  async function checkPlan() {
+    const r = await post("/api/plans/check", { text: textWithRepeat() });
+    const box = $("plan-check");
+    box.innerHTML = "";
+    const summary = document.createElement("p");
+    const end = r.end;
+    summary.textContent = "命令 " + r.commands + "個 ／ 一番遠くて " + r.farthest + "cm ／ 最後は元の位置から" +
+      (r.drift ? "前" + end.forward + "・右" + end.right + "cm（" + r.drift + "cmずれる）" : "ずれなし") +
+      (end.heading ? "、向きは右回り" + end.heading + "度" : "");
+    summary.className = "muted";
+    box.appendChild(summary);
+    for (const e of r.errors) {
+      const p = document.createElement("p");
+      p.className = "error";
+      p.textContent = (e.line ? e.line + "行目「" + e.text.trim() + "」: " : "") + e.message;
+      box.appendChild(p);
+    }
+    if (r.ok) {
+      const p = document.createElement("p");
+      p.className = "ok-text";
+      p.textContent = "OK！ このまま保存できます";
+      box.appendChild(p);
+    }
+  }
+
+  const scheduleCheck = () => { clearTimeout(checkTimer); checkTimer = setTimeout(checkPlan, 300); };
+  $("plan-text").addEventListener("input", scheduleCheck);
+  $("plan-repeat").addEventListener("change", checkPlan);
+
+  $("new-plan").addEventListener("click", () => {
+    current = "";
+    $("plan-name").value = "";
+    $("plan-text").value = "";
+    $("plan-repeat").checked = false;
+    $("delete-plan").hidden = true;
+    $("plan-msg").textContent = "";
+    $("plan-check").innerHTML = "";
+    loadList();
+    $("plan-name").focus();
+  });
+
+  $("save-plan").addEventListener("click", async () => {
+    const r = await post("/api/plans/save", { name: $("plan-name").value, text: textWithRepeat() });
+    if (r.ok) {
+      // Saving under a new name keeps the old file; tell the player which one was written.
+      current = r.name;
+      $("delete-plan").hidden = false;
+      $("plan-msg").className = "msg";
+      $("plan-msg").textContent = "「" + r.name + "」を保存しました ✓";
+      loadList();
+    } else {
+      $("plan-msg").className = "msg error";
+      $("plan-msg").textContent = r.errors.map((e) => (e.line ? e.line + "行目: " : "") + e.message).join(" ／ ");
+    }
+  });
+
+  $("delete-plan").addEventListener("click", async () => {
+    if (!current || !confirm("「" + current + "」を消しますか？")) return;
+    const r = await post("/api/plans/delete", { name: current });
+    if (!r.ok) { $("plan-msg").textContent = r.message || "消せませんでした"; return; }
+    $("new-plan").click();
+    $("plan-msg").textContent = "消しました";
+  });
+
+  for (const b of document.querySelectorAll("[data-insert]")) {
+    b.addEventListener("click", () => {
+      const command = b.dataset.insert;
+      if (command === "repeat") { $("plan-repeat").checked = true; checkPlan(); return; }
+      const area = $("plan-text");
+      const before = area.value.slice(0, area.selectionStart);
+      const after = area.value.slice(area.selectionEnd);
+      const sep = before && !before.endsWith("\n") ? "\n" : "";
+      area.value = before + sep + command + "\n" + after;
+      area.focus();
+      const pos = (before + sep + command + "\n").length;
+      area.setSelectionRange(pos, pos);
+      scheduleCheck();
+    });
+  }
+  loadList();
+}
+
 if (page === "router" || page === "drones") {
   // Remember the Wi-Fi name (never the password) for the next Tello.
   try { $("ssid").value = localStorage.getItem("ssid") || ""; } catch (e) { /* storage blocked */ }

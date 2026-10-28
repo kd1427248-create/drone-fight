@@ -4,3 +4,6 @@ __pycache__/
 # per-player data (name, drone serial numbers)
 settings.json
 drones.json
+# player-made battle files (the example is kept)
+plans/*
+!plans/例_*.txt

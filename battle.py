@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 
+import plans
 import tello_net
 
 APP_DIR = Path(__file__).resolve().parent
@@ -48,6 +49,8 @@ def height_fix(mine: int | None, theirs: int | None) -> str | None:
 def plan_lines(kind: str, name: str) -> list[str]:
     if kind == "mode" and name in {m["id"] for m in modes()}:
         path = MODE_DIR / f"{name}.txt"
+    elif kind == "plan" and name in {p["name"] for p in plans.list_plans() if p["ok"]}:
+        path = plans.PLAN_DIR / name
     elif kind == "file" and name in own_files():
         path = FILE_DIR / name
     else:
@@ -56,7 +59,7 @@ def plan_lines(kind: str, name: str) -> list[str]:
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         # The runner does command / takeoff itself; 'ap' must never run mid-battle.
-        if line and not line.startswith("#") and line not in ("command", "takeoff") \
+        if line and not line.startswith("#") and line not in ("command", "takeoff", plans.REPEAT) \
                 and not line.startswith("ap "):
             lines.append(line)
     return lines
@@ -153,6 +156,10 @@ class BattleRunner:
                 if (self.plan or {}).get("kind") == "mode" else None}
 
     # ---- internals ---------------------------------------------------------
+    @staticmethod
+    def _repeats(plan: dict) -> bool:
+        return plans.check((plans.PLAN_DIR / plan["name"]).read_text(encoding="utf-8"))["repeat"]
+
     def _plan_label(self) -> str:
         if not self.plan:
             return ""
@@ -267,7 +274,8 @@ class BattleRunner:
                         return
                 else:
                     errors = 0
-            if plan["kind"] == "file" and self.plan == plan and self.phase == "flying" \
+            loops = plan["kind"] == "mode" or (plan["kind"] == "plan" and self._repeats(plan))
+            if not loops and self.plan == plan and self.phase == "flying" \
                     and not self.stop_event.is_set():
                 # A file runs once; then hover (and keep the link alive) until the end.
                 self._note("ファイルの最後まで実行。ホバリングして待ちます")
