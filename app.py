@@ -39,12 +39,12 @@ def opponent_height() -> int | None:
 runner.opponent_height = opponent_height
 
 
-def opponent_pos() -> dict | None:
-    """Where the opponent is now, predicted along its current move."""
+def opponent_pos(lead: float = 0.0) -> dict | None:
+    """Where the opponent is now (or 'lead' seconds later), predicted along its current move."""
     others = room_peers()
     if not others:
         return None
-    return battle.where_now((others[0].get("battle") or {}).get("pos"), others[0].get("offset", 0))
+    return battle.where_now((others[0].get("battle") or {}).get("pos"), others[0].get("offset", 0), lead)
 
 
 runner.opponent_pos = opponent_pos

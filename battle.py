@@ -1,8 +1,10 @@
 """Fly one battle with the player's own drone and watch whether it is still airborne."""
 
+import math
 import socket
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import plans
@@ -34,7 +36,48 @@ FLEE_HEIGHTS = (60, 160)
 FLEE_STEP = 100  # cm per flee move, so it looks at the opponent again at least every second
 
 
-def where_now(their_pos: dict | None, offset: float = 0.0) -> dict | None:
+CHARGE_OVERSHOOT = 80  # cm past the opponent, so the charge goes through it
+CHARGE_LEAD = 1.0  # aim where a moving opponent will be this many seconds later
+
+
+def charge_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
+    """Bullfight charge: turn to face the opponent, match its height, run through it.
+
+    The run stops at the edge of the whole field (both halves of the arena).
+    """
+    x, y, _, heading = me
+    ox, oy = opponent
+    dx, dy = ox - x, oy - y
+    distance = math.hypot(dx, dy)
+    steps = []
+    if distance >= 1:
+        bearing = math.degrees(math.atan2(dy, dx))  # clockwise from the start direction
+        turn = (bearing - heading + 180) % 360 - 180
+        if abs(turn) >= 10:
+            steps.append(f"cw {round(turn)}" if turn > 0 else f"ccw {round(-turn)}")
+        heading = bearing
+    steps.append("match_height")
+    run = min(500, distance + CHARGE_OVERSHOOT, _room_ahead(x, y, heading))
+    if run >= 20:
+        steps.append(f"forward {round(run)}")
+    return steps
+
+
+def _room_ahead(x: float, y: float, heading: float) -> float:
+    """How far we can go straight on before leaving the field."""
+    rad = math.radians(heading)
+    ux, uy = math.cos(rad), math.sin(rad)
+    limits = []
+    for pos, step, low, high in ((x, ux, -ARENA_BACK, START_DISTANCE + ARENA_BACK),
+                                 (y, uy, -ARENA_SIDE, ARENA_SIDE)):
+        if step > 1e-6:
+            limits.append((high - pos) / step)
+        elif step < -1e-6:
+            limits.append((low - pos) / step)
+    return max(0.0, min(limits)) if limits else 0.0
+
+
+def where_now(their_pos: dict | None, offset: float = 0.0, lead: float = 0.0) -> dict | None:
     """The opponent's position right now: part way along the move it is making, if any.
 
     A move is sent as {from, to, start, duration}; 'start' is on the opponent's
@@ -45,7 +88,7 @@ def where_now(their_pos: dict | None, offset: float = 0.0) -> dict | None:
     move = their_pos.get("move")
     if not move:
         return their_pos
-    elapsed = tello_net.now() - (move["start"] - offset)
+    elapsed = tello_net.now() + lead - (move["start"] - offset)
     t = max(0.0, min(1.0, elapsed / max(0.1, move["duration"])))
     return {"x": move["from"][0] + (move["to"][0] - move["from"][0]) * t,
             "y": move["from"][1] + (move["to"][1] - move["from"][1]) * t}
@@ -119,7 +162,7 @@ class BattleRunner:
         self.monitor = StateMonitor(state_port)
         self.lock = threading.Lock()
         self.opponent_height = lambda: None  # set by the app: opponent's latest height (cm)
-        self.opponent_pos = lambda: None  # set by the app: opponent's own pose {"x","y"} (cm)
+        self.opponent_pos = lambda lead=0.0: None  # set by the app: opponent's pose {"x","y"} (cm)
         self._reset()
 
     def _reset(self) -> None:
@@ -293,10 +336,15 @@ class BattleRunner:
         errors = 0
         while not self.stop_event.is_set() and self.phase == "flying":
             plan = dict(self.plan)
-            lines = plan_lines(plan["kind"], plan["name"])
-            for line in lines:
+            lines = deque(plan_lines(plan["kind"], plan["name"]))
+            while lines:
+                line = lines.popleft()
                 if self.stop_event.is_set() or self.phase != "flying" or self.plan != plan:
                     break  # stopped, knocked down, or the mode was switched
+                if line == "charge":
+                    # Expands into: turn toward the opponent, match its height, run through.
+                    lines.extendleft(reversed(self._charge_plan()))
+                    continue
                 if line.startswith("delay"):
                     self._delay(float(line.split()[1]))
                     continue
@@ -361,6 +409,12 @@ class BattleRunner:
         # About half a second to speed up and slow down on top of the cruise time.
         self.motion = {"from": [round(x), round(y)], "to": [round(target[0]), round(target[1])],
                        "start": tello_net.now(), "duration": round(distance / max(10, speed) + 0.5, 2)}
+
+    def _charge_plan(self) -> list[str]:
+        opponent = opponent_in_my_frame(self.opponent_pos(CHARGE_LEAD))
+        steps = charge_steps(self.pose, opponent)
+        self._note(f"突進: 相手({round(opponent[0])}, {round(opponent[1])}) → {' / '.join(steps)}")
+        return steps
 
     def _flee_step(self) -> str | None:
         """One 'go' toward the spot farthest from the opponent, or None if we are there."""
