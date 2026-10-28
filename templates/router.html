@@ -20,6 +20,33 @@
   <p class="msg" id="router-msg"></p>
 </section>
 <section class="card">
+  <h2>床のミッションパッド</h2>
+  <p class="muted" style="margin-top:0">パッドの番号と、床のどこに置いたかを入れます。2台のPCで同じ数字にしてください。原点（前0・右0）は床の好きな一点です。そこから相手側を「前」、自分の右手を「右」にします。ロケットの向きは、パッドに描いてあるロケットが前と同じなら 0、右なら 90、後ろなら 180、左なら 270 です。</p>
+  <p class="muted">機体はパッドの真ん中に置いて離陸してください。写真のようにパッドの横の床に置いたままでは、下のカメラにパッドが映りません。分かるのは高さ30〜120cmで、パッドの上空に来たときだけです。</p>
+  <h3 style="font-size:15px;margin:14px 0 8px">一台で読んでみる</h3>
+  <p class="muted" style="margin-top:0">先に「1. ドローンを探す」で自分の機体にしておきます。パッドの真ん中に置き、機首を前（相手の方）に向けてから押します。読み取りはその場でホバリングして、見えた番号を出します。スキャンは前後左右に入力したcmだけ飛び、見つけた位置を下の表に入れます。その分、周りがあいていることを確認してください。原点は離陸した場所、前は離陸したときの機首の向きです。</p>
+  <div class="row">
+    <button type="button" class="ghost" id="pad-hover">その場で読んでみる</button>
+    <button type="button" class="ghost" id="pad-scan">周りをスキャン</button>
+    <label class="muted">前後左右 <input id="pad-span" inputmode="numeric" value="80" style="width:4.5em"> cm</label>
+    <button type="button" class="ghost" id="pad-land" hidden>着陸</button>
+    <button type="button" class="stop" id="pad-emergency" hidden>緊急停止</button>
+  </div>
+  <p class="msg" id="pad-test-msg"></p>
+  <p class="muted" id="pad-live" style="margin:0"></p>
+  <ul id="pad-found" style="margin:8px 0 0;padding-left:1.2em"></ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>番号</th><th>前（cm）</th><th>右（cm）</th><th>ロケットの向き</th></tr></thead>
+      <tbody id="pad-rows"></tbody>
+    </table>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button type="button" id="pad-save">位置を保存</button>
+    <span class="msg" id="pad-msg"></span>
+  </div>
+</section>
+<section class="card">
   <h2>元のTELLO-xxxxに戻す</h2>
   <p style="margin:0">Telloの電源を入れた状態で電源ボタンを約5秒長押しし、ランプが点滅したら離します。再起動するとTELLO-xxxxのWi-Fiが出てきます。</p>
 </section>
