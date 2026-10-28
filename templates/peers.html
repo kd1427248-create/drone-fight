@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>マッチング</h2>
+  <div class="row">
+    <label>プレイヤー名 <input id="player" placeholder="例: ゆーしん" maxlength="20" size="14"></label>
+    <label>自分のドローン <select id="my-drone"></select></label>
+    <label>合言葉 <input id="code" placeholder="4桁の数字" maxlength="4" size="9"
+                       inputmode="numeric" pattern="[0-9]{4}" autocomplete="off"></label>
+  </div>
+  <p class="muted" style="margin:10px 0 0">相手と同じ4桁の合言葉を入れて「マッチング開始」を押します。</p>
+  <div class="row" style="margin-top:14px">
+    <button id="match">マッチング開始</button>
+    <button class="ghost" id="unmatch" hidden>マッチングをやめる</button>
+    <span class="msg" id="match-msg"></span>
+  </div>
+</section>
+<section class="card match-status" id="status" hidden>
+  <div id="waiting" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p class="big">相手を待っています…</p>
+    <p class="muted" id="waiting-detail"></p>
+  </div>
+  <div id="matched" hidden>
+    <p class="matched-title">マッチ成立！</p>
+    <div class="versus">
+      <div class="player-card"><b id="me-name"></b><span id="me-drone"></span></div>
+      <span class="vs">VS</span>
+      <div class="player-card"><b id="op-name"></b><span id="op-drone"></span></div>
+    </div>
+    <p class="muted" id="others"></p>
+  </div>
+</section>
+<div class="next">
+  <a class="button ghost" href="{{ url_for('drones_page') }}">← 戻る</a>
+  <a class="button disabled" id="next" href="{{ url_for('battle_page') }}" aria-disabled="true">次へ：バトル →</a>
+</div>
+{% endblock %}

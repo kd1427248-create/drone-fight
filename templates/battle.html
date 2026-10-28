@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" id="no-match" hidden>
+  <h2>まだマッチしていません</h2>
+  <p style="margin:0">「2. マッチング」で相手とマッチすると、ここがバトルの部屋になります。</p>
+  <p style="margin:14px 0 0"><a class="button" href="{{ url_for('peers_page') }}">マッチングへ</a></p>
+</section>
+
+<div id="room" hidden>
+  <section class="card">
+    <div class="room-vs">
+      <div class="room-card">
+        <span class="who">あなた</span>
+        <b id="me-name"></b>
+        <span id="me-drone"></span>
+        <span class="mono muted" id="me-ssid"></span>
+        <span class="muted" id="me-battery"></span>
+        <span class="ready-badge" id="me-ready"></span>
+      </div>
+      <span class="vs">VS</span>
+      <div class="room-card">
+        <span class="who">相手</span>
+        <b id="op-name"></b>
+        <span id="op-drone"></span>
+        <span class="mono muted" id="op-ssid"></span>
+        <span class="muted" id="op-battery"></span>
+        <span class="ready-badge" id="op-ready"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- before the battle: choose a mode or a file, then get ready -->
+  <section class="card" id="setup">
+    <h2>作戦を選ぶ</h2>
+    <div class="tabs">
+      <button class="tab on" data-tab="mode">モード</button>
+      <button class="tab" data-tab="file">自分のファイル</button>
+    </div>
+    <div id="mode-list" class="mode-grid"></div>
+    <div id="file-pick" hidden>
+      <select id="file"></select>
+      <pre class="mono muted" id="file-preview"></pre>
+      <p class="muted" style="margin:0">ファイルは書いてあるとおりに1回実行し、最後まで行ったらその場でホバリングします。<code>takeoff</code> と <code>command</code> はアプリが自動で行います。</p>
+    </div>
+    <p class="room-status" id="room-status"></p>
+    <div class="row" style="justify-content:center">
+      <button id="ready" class="big-button">準備OK</button>
+    </div>
+    <p class="muted" style="text-align:center;margin:10px 0 0">2人とも準備OKになると5秒後に同時に離陸します。最後まで飛んでいた方が勝ち（制限時間<span id="limit"></span>秒）。</p>
+  </section>
+
+  <!-- countdown and the battle itself -->
+  <section class="card battle-live" id="live" hidden>
+    <p class="countdown" id="countdown"></p>
+    <div id="fight" hidden>
+      <p class="timer" id="timer"></p>
+      <div class="live-grid">
+        <div><span class="muted">あなた</span><b id="me-state"></b><span class="muted" id="me-plan"></span></div>
+        <div><span class="muted">相手</span><b id="op-state"></b><span class="muted" id="op-plan"></span></div>
+      </div>
+      <div id="mode-switch" class="row" style="justify-content:center;margin-top:14px"></div>
+      <div class="row" style="justify-content:center;margin-top:14px">
+        <button class="ghost" id="surrender">降参（着陸）</button>
+        <button class="stop" id="emergency">緊急停止（プロペラ停止）</button>
+      </div>
+      <p class="muted" style="text-align:center;margin:8px 0 0">Escキーで降参（着陸）します。</p>
+    </div>
+  </section>
+
+  <!-- result -->
+  <section class="card result" id="result" hidden>
+    <p class="result-title" id="result-title"></p>
+    <p class="muted" id="result-reason"></p>
+    <button id="rematch">もう一回</button>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary class="muted">自分のドローンの記録</summary>
+      <pre class="mono muted" id="log" style="white-space:pre-wrap;margin:8px 0 0"></pre>
+    </details>
+  </section>
+</div>
+
+<div class="next">
+  <a class="button ghost" href="{{ url_for('peers_page') }}">← マッチングに戻る</a>
+  <span></span>
+</div>
+{% endblock %}

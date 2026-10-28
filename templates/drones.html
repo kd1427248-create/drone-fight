@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>同じWi-FiにいるTelloを探す</h2>
+  <div class="row">
+    <button id="scan">ドローンを探す</button>
+    <span class="msg" id="scan-msg"></span>
+  </div>
+  <div class="table-wrap">
+    <table style="margin-top:10px">
+      <thead><tr><th style="width:28%">名前（覚えておく）</th><th>Wi-Fi名</th><th>電池</th><th>機体番号</th><th></th></tr></thead>
+      <tbody id="drones"><tr><td colspan="5" class="muted">まだ探していません</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="margin:10px 0 0">見つからないときは、Telloの電源と、Telloがルーターにつながっているか（右上の「設定」）を確認してください。</p>
+</section>
+<section class="card" id="join-card" hidden>
+  <h2>このTelloを学校・家のWi-Fiにつなぐ</h2>
+  <p class="muted" style="margin-top:0">PC2台・Tello2台で遊ぶときに使います。ルーターのWi-Fi名とパスワードを入れてください（Telloのパスワードではありません。2.4GHzのWi-Fi）。</p>
+  <div class="row">
+    <input id="ssid" placeholder="Wi-Fi名" autocomplete="off">
+    <input id="password" type="password" placeholder="ルーターのパスワード" autocomplete="off">
+    <button id="router">つなぐ</button>
+  </div>
+  <p class="msg" id="router-msg"></p>
+</section>
+<div class="next">
+  <span></span>
+  <a class="button" href="{{ url_for('peers_page') }}">次へ：マッチング →</a>
+</div>
+{% endblock %}

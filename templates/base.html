@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tello Connect</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body data-page="{{ page }}">
+<main>
+  <h1>Tello Connect</h1>
+  <p class="sub">このPC: <b class="mono" id="local-ip">…</b> <span class="badge" id="mode">…</span></p>
+  <nav class="steps">
+    <a href="{{ url_for('drones_page') }}" class="{{ 'on' if page == 'drones' }}">1. ドローンを探す</a>
+    <a href="{{ url_for('peers_page') }}" class="{{ 'on' if page == 'peers' }}">2. マッチング</a>
+    <a href="{{ url_for('router_page') }}" class="setup {{ 'on' if page == 'router' }}">設定</a>
+  </nav>
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

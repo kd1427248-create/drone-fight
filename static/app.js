@@ -1,0 +1,310 @@
+const $ = (id) => document.getElementById(id);
+const page = document.body.dataset.page;
+let editing = false;
+
+async function post(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify(body || {}) });
+  return res.json();
+}
+
+function droneLabel(d) { return (d.name || "名前なし") + "（" + (d.ssid || d.ip) + "）"; }
+
+async function copy(text, button) {
+  try { await navigator.clipboard.writeText(text); } catch (e) { return; }
+  const old = button.textContent;
+  button.textContent = "コピーしました";
+  setTimeout(() => button.textContent = old, 1200);
+}
+
+function renderHeader(s) {
+  $("local-ip").textContent = s.local_ip || "ネットワークなし";
+  $("mode").textContent = { router: "ルーターにつながっています", direct: "TelloのWi-Fiに直接つながっています",
+                            offline: "Wi-Fiにつながっていません" }[s.mode];
+  $("mode").className = "badge " + s.mode;
+}
+
+function renderDrones(s) {
+  // On a Tello's own Wi-Fi, offer the router setup right here.
+  $("join-card").hidden = !(s.mode === "direct" && s.drones.length);
+  $("scan").disabled = s.scanning;
+  $("scan-msg").textContent = s.message + (s.scanned_at ? "（" + s.scanned_at + "）" : "");
+  if (editing) return;
+  $("drones").innerHTML = s.drones.length ? "" :
+    '<tr><td colspan="5" class="muted">' +
+    (s.scanned_at ? "見つかりませんでした。電源・Wi-Fiを確認してください" : "まだ探していません") + "</td></tr>";
+  for (const d of s.drones) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td><input maxlength="20" placeholder="例: ゆーしん機"><div class="saved muted"></div></td>' +
+      '<td class="mono"></td><td></td><td class="mono muted"></td>' +
+      '<td><button class="ghost">IPをコピー</button></td>';
+    const input = tr.querySelector("input");
+    const saved = tr.querySelector(".saved");
+    input.value = d.name;
+    const save = async () => {
+      await post("/api/name", { sn: d.sn, name: input.value.trim() });
+      saved.textContent = input.value.trim() ? "保存しました ✓" : "名前を消しました";
+      editing = false;
+      setTimeout(refresh, 1200);
+    };
+    input.addEventListener("focus", () => { editing = true; saved.textContent = ""; });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
+    // Saved on Enter or when leaving the box, so a typed name is never lost.
+    input.addEventListener("blur", () => {
+      if (input.value.trim() !== d.name) save(); else editing = false;
+    });
+    tr.children[1].textContent = d.ssid || "?";
+    tr.children[1].title = "IP " + d.ip;
+    tr.children[2].textContent = d.battery ? d.battery + "%" : "?";
+    tr.children[3].textContent = d.sn;
+    tr.children[4].querySelector("button").addEventListener("click", (e) => copy(d.ip, e.target));
+    $("drones").appendChild(tr);
+  }
+}
+
+let meLoaded = false;
+
+function droneText(d) {
+  if (!d) return "ドローン未選択";
+  return (d.name || "名前なし") + "（" + (d.ip ? (d.ssid || d.ip) : "未確認") + "）";
+}
+
+function renderPeers(s) {
+  if (!meLoaded) { $("player").value = s.player; $("code").value = s.code; meLoaded = true; }
+  // Drones from the last scan, plus the saved one even if it is not found right now.
+  const options = [["", "選んでください"]].concat(s.drones.map((d) => [d.sn, droneLabel(d)]));
+  if (s.my_drone && !s.drones.some((d) => d.sn === s.my_drone.sn)) {
+    options.push([s.my_drone.sn, (s.my_drone.name || s.my_drone.sn) + "（今は見つかっていません）"]);
+  }
+  if (fillSelect($("my-drone"), options) && s.my_drone) $("my-drone").value = s.my_drone.sn;
+
+  // Inputs are locked while matching.
+  for (const id of ["player", "my-drone", "code"]) $(id).disabled = s.matching;
+  $("match").hidden = s.matching;
+  $("unmatch").hidden = !s.matching;
+  $("status").hidden = !s.matching;
+
+  const opponent = s.matching ? s.peers[0] : null;
+  $("waiting").hidden = !s.matching || !!opponent;
+  $("matched").hidden = !opponent;
+  $("waiting-detail").textContent = "合言葉「" + s.code + "」で探しています。相手にも同じ合言葉でマッチングを始めてもらってください";
+  if (opponent) {
+    $("me-name").textContent = s.player;
+    $("me-drone").textContent = droneText(s.my_drone);
+    $("op-name").textContent = opponent.player || "名前なし";
+    $("op-drone").textContent = droneText(opponent.drone);
+    const others = s.peers.slice(1).map((p) => p.player || "名前なし");
+    $("others").textContent = others.length ? "同じ合言葉の人がほかにもいます: " + others.join("、") : "";
+  }
+  $("next").classList.toggle("disabled", !opponent);
+  $("next").setAttribute("aria-disabled", String(!opponent));
+}
+
+function fillSelect(select, options) {
+  const keep = select.value;
+  const sig = JSON.stringify(options);
+  if (select.dataset.sig === sig) return false;
+  select.dataset.sig = sig;
+  select.innerHTML = "";
+  for (const [value, label] of options) select.add(new Option(label, value));
+  if (options.some(([v]) => v === keep)) select.value = keep;
+  return true;
+}
+
+// ---- battle room ----
+let tab = "mode";
+let lastFile = "";
+const STATE_TEXT = { idle: "待機中", starting: "離陸中…", flying: "飛行中", down: "地面に落ちた", landed: "着陸" };
+
+function setPlayerCard(prefix, name, drone, ready) {
+  $(prefix + "-name").textContent = name || "名前なし";
+  $(prefix + "-drone").textContent = drone ? (drone.name || "名前なし") : "ドローン未選択";
+  $(prefix + "-ssid").textContent = drone && drone.ssid ? drone.ssid : "Wi-Fi名 未確認";
+  $(prefix + "-battery").textContent = drone && drone.battery ? "電池 " + drone.battery + "%" : "電池 ?";
+  $(prefix + "-ready").textContent = ready ? "準備OK" : "準備中…";
+  $(prefix + "-ready").className = "ready-badge" + (ready ? " on" : "");
+}
+
+function renderModes(s) {
+  const box = $("mode-list");
+  const sig = JSON.stringify([s.modes, s.plan]);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = "";
+  for (const m of s.modes) {
+    const b = document.createElement("button");
+    const chosen = s.plan && s.plan.kind === "mode" && s.plan.name === m.id;
+    b.className = "mode-card" + (chosen ? " on" : "");
+    b.innerHTML = "<b></b><span></span>";
+    b.children[0].textContent = m.name;
+    b.children[1].textContent = m.description;
+    b.addEventListener("click", () => choosePlan("mode", m.id));
+    box.appendChild(b);
+  }
+}
+
+async function choosePlan(kind, name) {
+  const r = await post("/api/plan", { kind, name });
+  if (!r.ok) $("room-status").textContent = r.message;
+  refresh();
+}
+
+async function showFile(name) {
+  if (!name || name === lastFile) return;
+  lastFile = name;
+  const r = await (await fetch("/api/plan_text?kind=file&name=" + encodeURIComponent(name))).json();
+  $("file-preview").textContent = r.lines.join("\n");
+}
+
+function droneState(b) {
+  if (!b) return "?";
+  return (STATE_TEXT[b.phase] || b.phase) + (b.airborne && b.height != null ? "（高さ " + b.height + "cm）" : "");
+}
+
+function renderBattle(s) {
+  const opponent = s.matching ? s.peers[0] : null;
+  $("no-match").hidden = !!opponent;
+  $("room").hidden = !opponent;
+  if (!opponent) return;
+  setPlayerCard("me", s.player, s.my_drone, s.ready);
+  setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
+  $("limit").textContent = s.battle_seconds;
+  $("log").textContent = s.me.log.join("\n");
+
+  const started = !!s.start_at;
+  const finished = !!s.result;
+  $("setup").hidden = started;
+  $("live").hidden = !started || finished;
+  $("result").hidden = !finished;
+
+  if (!started) {
+    renderModes(s);
+    $("mode-list").hidden = tab !== "mode";
+    $("file-pick").hidden = tab !== "file";
+    for (const t of document.querySelectorAll(".tab")) t.classList.toggle("on", t.dataset.tab === tab);
+    if (fillSelect($("file"), [["", "ファイルを選んでください"]].concat(s.own_files.map((f) => [f, f])))
+        && s.plan && s.plan.kind === "file") $("file").value = s.plan.name;
+    showFile($("file").value);
+    const planText = !s.plan ? "モードかファイルを選んでください"
+      : s.plan.kind === "mode" ? "作戦: " + (s.modes.find((m) => m.id === s.plan.name) || {}).name
+      : "作戦: " + s.plan.name;
+    for (const id of ["file"]) $(id).disabled = s.ready;
+    $("mode-list").classList.toggle("locked", s.ready);
+    $("ready").textContent = s.ready ? "準備OKを取り消す" : "準備OK";
+    $("ready").className = "big-button" + (s.ready ? " ghost" : "");
+    $("ready").disabled = !s.plan;
+    $("room-status").textContent = planText + " ／ " + (s.ready && opponent.ready ? "まもなくスタート！"
+      : s.ready ? "相手の準備を待っています…" : "準備ができたら「準備OK」を押してください");
+    return;
+  }
+
+  // Countdown, then the live battle.
+  const left = s.start_at - s.now;
+  $("countdown").hidden = left <= -1.5;
+  $("countdown").textContent = left > 0 ? Math.ceil(left) : "スタート！";
+  $("fight").hidden = left > 0;
+  const elapsed = Math.max(0, s.now - s.start_at);
+  $("timer").textContent = "残り " + Math.max(0, Math.ceil(s.battle_seconds - elapsed)) + " 秒";
+  $("me-state").textContent = droneState(s.me);
+  $("me-plan").textContent = s.me.plan ? "作戦: " + s.me.plan : "";
+  $("op-state").textContent = droneState(opponent.battle);
+  $("op-plan").textContent = opponent.battle && opponent.battle.plan ? "作戦: " + opponent.battle.plan : "";
+  const switcher = $("mode-switch");
+  const sig = JSON.stringify([s.modes, s.me.mode_id, s.me.phase]);
+  if (switcher.dataset.sig !== sig) {
+    switcher.dataset.sig = sig;
+    switcher.innerHTML = "";
+    for (const m of s.modes) {
+      const b = document.createElement("button");
+      b.textContent = m.name;
+      b.className = m.id === s.me.mode_id ? "" : "ghost";
+      b.disabled = s.me.phase !== "flying";
+      b.addEventListener("click", () => post("/api/mode", { name: m.id }).then(refresh));
+      switcher.appendChild(b);
+    }
+  }
+  $("surrender").disabled = !["starting", "flying"].includes(s.me.phase);
+
+  if (finished) {
+    const titles = { win: "勝ち！", lose: "負け…", draw: "引き分け" };
+    $("result-title").textContent = titles[s.result.outcome];
+    $("result-title").className = "result-title " + s.result.outcome;
+    $("result-reason").textContent = s.result.reason;
+    $("rematch").disabled = ["starting", "flying"].includes(s.me.phase);
+  }
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); } catch (e) { return; }
+  renderHeader(s);
+  if (page === "drones") renderDrones(s);
+  if (page === "peers") renderPeers(s);
+  if (page === "battle") renderBattle(s);
+}
+
+if (page === "drones") {
+  $("scan").addEventListener("click", async () => { await post("/api/scan"); refresh(); });
+}
+if (page === "peers") {
+  $("code").addEventListener("input", () => $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4));
+  $("next").addEventListener("click", (e) => {
+    if ($("next").classList.contains("disabled")) {
+      e.preventDefault();
+      $("match-msg").textContent = "マッチが成立すると次へ進めます";
+    }
+  });
+  $("match").addEventListener("click", async () => {
+    const r = await post("/api/match", { player: $("player").value, sn: $("my-drone").value,
+                                         code: $("code").value });
+    $("match-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  });
+  $("unmatch").addEventListener("click", async () => {
+    await post("/api/unmatch");
+    $("match-msg").textContent = "";
+    refresh();
+  });
+}
+if (page === "battle") {
+  for (const t of document.querySelectorAll(".tab")) {
+    t.addEventListener("click", () => { tab = t.dataset.tab; refresh(); });
+  }
+  $("file").addEventListener("change", () => {
+    showFile($("file").value);
+    if ($("file").value) choosePlan("file", $("file").value);
+  });
+  $("ready").addEventListener("click", async () => {
+    const r = await post("/api/ready", { ready: $("ready").textContent === "準備OK" });
+    if (!r.ok) $("room-status").textContent = r.message;
+    refresh();
+  });
+  $("surrender").addEventListener("click", () => post("/api/surrender").then(refresh));
+  $("emergency").addEventListener("click", () => post("/api/emergency").then(refresh));
+  $("rematch").addEventListener("click", async () => {
+    const r = await post("/api/rematch");
+    if (!r.ok) alert(r.message);
+    refresh();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("live").hidden) post("/api/surrender").then(refresh);
+  });
+  setInterval(refresh, 300);  // smoother countdown and live state
+}
+if (page === "router" || page === "drones") {
+  // Remember the Wi-Fi name (never the password) for the next Tello.
+  try { $("ssid").value = localStorage.getItem("ssid") || ""; } catch (e) { /* storage blocked */ }
+  $("router").addEventListener("click", async () => {
+    $("router-msg").textContent = "送っています…";
+    const ssid = $("ssid").value.trim();
+    const r = await post("/api/router", { ssid, password: $("password").value });
+    $("router-msg").textContent = r.message;
+    if (r.ok) {
+      $("password").value = "";
+      try { localStorage.setItem("ssid", ssid); } catch (e) { /* storage blocked */ }
+    }
+  });
+}
+
+refresh();
+setInterval(refresh, 1500);

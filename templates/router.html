@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>直接つなぐなら設定はいりません</h2>
+  <p style="margin:0">TelloのWi-Fi（TELLO-xxxx）にはパスワードがありません。MacをTELLO-xxxxにつなぎ、「1. ドローンを探す」を押すと <span class="mono">192.168.10.1</span> のTelloが出ます。ただし直接つなぐと、1台のPCで使えるTelloは1台だけです。</p>
+</section>
+<section class="card">
+  <h2>Telloをルーター（学校・家のWi-Fi）につなぐ</h2>
+  <p class="muted" style="margin-top:0">PC2台・Tello2台で同じWi-Fiに入って遊ぶときだけ必要です。Telloごとに最初の1回だけ行います。</p>
+  <ol>
+    <li>MacのWi-Fiを、設定したいTelloの <b>TELLO-xxxx</b> に切り替えます。</li>
+    <li>ルーター（学校・家のWi-Fi）の名前とパスワードを入れて「設定する」を押します。Telloのパスワードではありません（2.4GHzのWi-Fi）。</li>
+    <li>Telloが再起動してルーターにつながります。MacもルーターのWi-Fiに戻し、「1. ドローンを探す」で確認します。</li>
+  </ol>
+  <div class="row">
+    <input id="ssid" placeholder="Wi-Fi名" autocomplete="off">
+    <input id="password" type="password" placeholder="ルーターのパスワード" autocomplete="off">
+    <button id="router">設定する</button>
+  </div>
+  <p class="msg" id="router-msg"></p>
+</section>
+<section class="card">
+  <h2>元のTELLO-xxxxに戻す</h2>
+  <p style="margin:0">Telloの電源を入れた状態で電源ボタンを約5秒長押しし、ランプが点滅したら離します。再起動するとTELLO-xxxxのWi-Fiが出てきます。</p>
+</section>
+{% endblock %}
