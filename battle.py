@@ -77,6 +77,38 @@ def _room_ahead(x: float, y: float, heading: float) -> float:
     return max(0.0, min(limits)) if limits else 0.0
 
 
+GUARD_REACH = 100    # cm: closer than this and the guard hits back
+GUARD_PUSH = 50      # cm of the counter hit
+GUARD_HOME = 30      # cm: farther than this from the start and it walks back first
+KEEPALIVE = 4        # s: poke the drone if nothing was sent for this long (it lands after 15 s)
+
+
+def _face(x: float, y: float, heading: float, target: tuple[float, float]) -> tuple[list[str], float]:
+    """The turn that points us at 'target' (none if already within 15 degrees)."""
+    bearing = math.degrees(math.atan2(target[1] - y, target[0] - x))
+    turn = (bearing - heading + 180) % 360 - 180
+    if abs(turn) < 15:
+        return [], heading
+    return [f"cw {round(turn)}" if turn > 0 else f"ccw {round(-turn)}"], bearing
+
+
+def guard_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
+    """Hold the start, face the opponent, and hit back when it comes within reach.
+
+    Returns [] when there is nothing to do but keep watching.
+    """
+    x, y, _, heading = me
+    away = math.hypot(x, y)
+    if away > GUARD_HOME:
+        # Back to our spot first (a counter hit or a bump moved us).
+        command = plans.go_command(-x, -y, 0, heading, 60)
+        return [command] if command else []
+    turn, heading = _face(x, y, heading, opponent)
+    if math.hypot(opponent[0] - x, opponent[1] - y) <= GUARD_REACH:
+        return turn + ["match_height", f"forward {GUARD_PUSH}"]
+    return turn
+
+
 def where_now(their_pos: dict | None, offset: float = 0.0, lead: float = 0.0) -> dict | None:
     """The opponent's position right now: part way along the move it is making, if any.
 
@@ -175,6 +207,8 @@ class BattleRunner:
         self.height: int | None = None
         self.pose = (0.0, 0.0, 0.0, 0)  # where our commands have taken us, from the start
         self.speed = 100  # cm/s, updated by 'speed' commands
+        self.speed_set = False  # True once the drone has confirmed a 'speed' command
+        self.last_sent = time.monotonic()
         self.motion: dict | None = None  # the move in progress, so the opponent can predict us
         self.height_at = 0.0  # when the last state packet arrived (monotonic)
         self.moved_at = 0.0   # when the last command finished (monotonic)
@@ -284,6 +318,7 @@ class BattleRunner:
             pass
         sock.settimeout(0.2)
         self.current = command
+        self.last_sent = time.monotonic()
         self._raw(command)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -348,13 +383,22 @@ class BattleRunner:
                 if line.startswith("delay"):
                     self._delay(float(line.split()[1]))
                     continue
+                if line.startswith("speed ") and self.speed_set and line == f"speed {self.speed}":
+                    continue  # already flying at this speed: no need to send it every loop
+                if line == "guard":
+                    steps = self._guard_plan()
+                    if steps:
+                        lines.extendleft(reversed(steps))
+                    else:
+                        self._wait_watching()
+                    continue
                 if line == "flee_far":
                     deadline = time.monotonic() + 0.6  # wait for a height measured after the last move
                     while self.height_at <= self.moved_at + 0.1 and time.monotonic() < deadline:
                         time.sleep(0.05)
                     line = self._flee_step()
                     if line is None:
-                        self._delay(0.4)  # already as far away as we can be: wait and look again
+                        self._wait_watching()  # already as far away as we can be
                         continue
                 if line == "match_height":
                     # Only trust a height measured after the last move, so a stale
@@ -381,6 +425,7 @@ class BattleRunner:
                         pass
                     if line.startswith("speed "):
                         self.speed = int(line.split()[1])
+                        self.speed_set = True
                 if line == "land":
                     self.stop_reason = "ファイルの land で着陸"
                     return self._finish("landed", self.stop_reason)
@@ -409,6 +454,21 @@ class BattleRunner:
         # About half a second to speed up and slow down on top of the cruise time.
         self.motion = {"from": [round(x), round(y)], "to": [round(target[0]), round(target[1])],
                        "start": tello_net.now(), "duration": round(distance / max(10, speed) + 0.5, 2)}
+
+    def _wait_watching(self, seconds: float = 0.3) -> None:
+        """Hover a moment before looking again, keeping the link alive so it never auto-lands."""
+        self.stop_event.wait(seconds)
+        if time.monotonic() - self.last_sent > KEEPALIVE and not self.stop_event.is_set():
+            self.battery = self._send("battery?", 3) or self.battery
+
+    def _guard_plan(self) -> list[str]:
+        opponent = opponent_in_my_frame(self.opponent_pos(0.3))
+        steps = guard_steps(self.pose, opponent)
+        if any(s.startswith("forward") for s in steps):
+            self._note(f"迎え撃つ: 相手({round(opponent[0])}, {round(opponent[1])}) → {' / '.join(steps)}")
+        elif any(s.startswith("go") for s in steps):
+            self._note("スタート地点に戻る")
+        return steps
 
     def _charge_plan(self) -> list[str]:
         opponent = opponent_in_my_frame(self.opponent_pos(CHARGE_LEAD))
