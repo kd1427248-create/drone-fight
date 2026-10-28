@@ -173,6 +173,52 @@ def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None) -> tu
     return plans.go_command(max(-50, min(50, mx - x)), max(-50, min(50, my - y)), 0, heading, 100), False
 
 
+FLIP_MIN_BATTERY = 50  # Tello refuses flips below this
+FLIP_MIN_HEIGHT = 70
+
+
+def _turn(heading: float, bearing: float) -> tuple[list[str], float]:
+    turn = (bearing - heading + 180) % 360 - 180
+    if abs(turn) < 10:
+        return [], heading
+    return [f"cw {round(turn)}" if turn > 0 else f"ccw {round(-turn)}"], bearing
+
+
+def _room_toward(x: float, y: float, bearing: float, wanted: float) -> float:
+    return max(0.0, min(wanted, 500, _room_ahead(x, y, bearing)))
+
+
+def trick_steps(me: tuple, opponent: tuple[float, float], can_flip: bool, rng=random) -> tuple[str, list[str]]:
+    """One showy attack, picked at random: (name, commands)."""
+    x, y, _, heading = me
+    dx, dy = opponent[0] - x, opponent[1] - y
+    distance = math.hypot(dx, dy)
+    to_opponent = math.degrees(math.atan2(dy, dx))
+    trick = rng.choice(("slide", "backflip", "spin"))
+    if trick == "slide":
+        # Face so the opponent is on our right, slide sideways at it, then flip into it.
+        turn, heading = _turn(heading, to_opponent - 90)
+        run = _room_toward(x, y, to_opponent, distance - 50)
+        steps = turn + ["match_height"]
+        if run >= 20:
+            steps.append(f"right {round(run)}")
+        steps.append("flip r" if can_flip else "right 40")
+        return "横向きスライド", steps
+    if trick == "backflip":
+        # Close in, turn our back to it, and back-flip into it.
+        turn, heading = _turn(heading, to_opponent)
+        run = _room_toward(x, y, to_opponent, distance - 70)
+        steps = turn + ([f"forward {round(run)}"] if run >= 20 else [])
+        steps += _turn(heading, to_opponent + 180)[0] + ["match_height"]
+        steps.append("flip b" if can_flip else "back 50")
+        return "バク宙アタック", steps
+    # Spin on the spot facing it, then charge through.
+    turn, heading = _turn(heading, to_opponent)
+    run = _room_toward(x, y, to_opponent, distance + CHARGE_OVERSHOOT)
+    steps = turn + ["cw 360", "match_height"] + ([f"forward {round(run)}"] if run >= 20 else [])
+    return "スピン突進", steps
+
+
 def where_now(their_pos: dict | None, offset: float = 0.0, lead: float = 0.0) -> dict | None:
     """The opponent's position right now: part way along the move it is making, if any.
 
@@ -441,6 +487,9 @@ class BattleRunner:
                 line = lines.popleft()
                 if self.stop_event.is_set() or self.phase != "flying" or self.plan != plan:
                     break  # stopped, knocked down, or the mode was switched
+                if line == "trick":
+                    lines.extendleft(reversed(self._trick_plan()))
+                    continue
                 if line == "charge":
                     # Expands into: turn toward the opponent, match its height, run through.
                     lines.extendleft(reversed(self._charge_plan()))
@@ -542,6 +591,15 @@ class BattleRunner:
             self._note(f"迎え撃つ: 相手({round(opponent[0])}, {round(opponent[1])}) → {' / '.join(steps)}")
         elif any(s.startswith("go") for s in steps):
             self._note("スタート地点に戻る")
+        return steps
+
+    def _trick_plan(self) -> list[str]:
+        opponent = opponent_in_my_frame(self.opponent_pos(CHARGE_LEAD))
+        battery = int(self.battery) if self.battery and str(self.battery).isdigit() else 0
+        can_flip = battery >= FLIP_MIN_BATTERY and (self.height or 0) >= FLIP_MIN_HEIGHT
+        name, steps = trick_steps(self.pose, opponent, can_flip)
+        skipped_flip = not can_flip and name != "スピン突進"
+        self._note(f"技: {name}（{' / '.join(steps)}）" + (" ※電池か高さが足りないので宙返りの代わりに移動" if skipped_flip else ""))
         return steps
 
     def _charge_plan(self) -> list[str]:

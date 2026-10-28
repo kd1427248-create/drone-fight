@@ -19,7 +19,7 @@ def _number(word: str, low: float, high: float, integer: bool = True) -> float:
     return value
 
 
-APP_COMMANDS = ("match_height", "flee_far", "charge", "guard", "dodge", "land")  # handled by this app, no fixed move
+APP_COMMANDS = ("match_height", "flee_far", "charge", "guard", "dodge", "trick", "land")  # handled by this app, no fixed move
 
 
 def move(pose: tuple, line: str) -> tuple:
