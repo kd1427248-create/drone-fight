@@ -24,13 +24,31 @@
   <p class="muted" style="margin-top:0">パッドの番号と、床のどこに置いたかを入れます。2台のPCで同じ数字にしてください。原点（前0・右0）は床の好きな一点です。そこから相手側を「前」、自分の右手を「右」にします。ロケットの向きは、パッドに描いてあるロケットが前と同じなら 0、右なら 90、後ろなら 180、左なら 270 です。</p>
   <p class="muted">機体はパッドの真ん中に置いて離陸してください。写真のようにパッドの横の床に置いたままでは、下のカメラにパッドが映りません。分かるのは高さ30〜120cmで、パッドの上空に来たときだけです。</p>
   <h3 style="font-size:15px;margin:14px 0 8px">一台で読んでみる</h3>
-  <p class="muted" style="margin-top:0">先に「1. ドローンを探す」で自分の機体にしておきます。パッドの真ん中に置き、機首を前（相手の方）に向けてから押します。読み取りはその場でホバリングして、見えた番号を出します。スキャンは前後左右に入力したcmだけ飛び、見つけた位置を下の表に入れます。その分、周りがあいていることを確認してください。原点は離陸した場所、前は離陸したときの機首の向きです。</p>
+  <p class="muted" style="margin-top:0">先に「1. ドローンを探す」で自分の機体にしておきます。パッドの真ん中に置き、機首を前（相手の方）に向けてから押します。読み取りは離陸したあと、番号が見えている間もボタンか矢印キーで動かせます。スキャンは前後左右に入力したcmだけ飛び、見つけた位置を下の表に入れます。その分、周りがあいていることを確認してください。原点は離陸した場所、前は離陸したときの機首の向きです。</p>
   <div class="row">
     <button type="button" class="ghost" id="pad-hover">その場で読んでみる</button>
     <button type="button" class="ghost" id="pad-scan">周りをスキャン</button>
     <label class="muted">前後左右 <input id="pad-span" inputmode="numeric" value="80" style="width:4.5em"> cm</label>
     <button type="button" class="ghost" id="pad-land" hidden>着陸</button>
     <button type="button" class="stop" id="pad-emergency" hidden>緊急停止</button>
+  </div>
+  <div id="pad-stick" hidden>
+    <div class="row" style="justify-content:center">
+      <button type="button" class="ghost" data-move="forward 30">前へ 30cm</button>
+    </div>
+    <div class="row" style="justify-content:center">
+      <button type="button" class="ghost" data-move="ccw 45">左回り</button>
+      <button type="button" class="ghost" data-move="left 30">左へ 30cm</button>
+      <button type="button" class="ghost" data-move="right 30">右へ 30cm</button>
+      <button type="button" class="ghost" data-move="cw 45">右回り</button>
+    </div>
+    <div class="row" style="justify-content:center">
+      <button type="button" class="ghost" data-move="back 30">後ろへ 30cm</button>
+    </div>
+    <div class="row" style="justify-content:center">
+      <button type="button" class="ghost" data-move="up 20">上昇</button>
+      <button type="button" class="ghost" data-move="down 20">下降</button>
+    </div>
   </div>
   <p class="msg" id="pad-test-msg"></p>
   <p class="muted" id="pad-live" style="margin:0"></p>

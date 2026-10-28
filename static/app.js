@@ -468,6 +468,7 @@ function renderPadTest(test) {
   $("pad-span").disabled = flying;
   $("pad-land").hidden = !flying;
   $("pad-emergency").hidden = !flying;
+  $("pad-stick").hidden = !(test.phase === "flying" && test.mode === "hover");
   if (test.message) $("pad-test-msg").textContent = test.message;
   const seen = test.live;
   if (flying && seen && seen.mid > 0 && seen.x != null) {
@@ -516,6 +517,27 @@ if (page === "router" && $("pad-save")) {
   });
   $("pad-land").addEventListener("click", () => post("/api/pad-test", { action: "land" }).then(refresh));
   $("pad-emergency").addEventListener("click", () => post("/api/pad-test", { action: "emergency" }).then(refresh));
+  $("pad-stick").addEventListener("click", async (event) => {
+    const command = event.target.closest("button")?.dataset.move;
+    if (!command) return;
+    const r = await post("/api/pad-test", { action: "move", command });
+    if (!r.ok) $("pad-test-msg").textContent = r.message;
+    refresh();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target.closest("input, textarea")) return;
+    if ($("pad-stick").hidden) return;
+    const command = {
+      ArrowUp: "forward 30", ArrowDown: "back 30", ArrowLeft: "left 30", ArrowRight: "right 30",
+      q: "ccw 45", e: "cw 45", r: "up 20", f: "down 20",
+    }[event.key];
+    if (!command) return;
+    event.preventDefault();
+    post("/api/pad-test", { action: "move", command }).then((r) => {
+      if (!r.ok) $("pad-test-msg").textContent = r.message;
+    });
+  });
   setInterval(refresh, 400);
 }
 

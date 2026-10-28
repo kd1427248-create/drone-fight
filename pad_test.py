@@ -5,6 +5,7 @@ pad. Scan flies a slow grid around that spot and records each pad it finds.
 The takeoff point is the origin and the nose at takeoff is forward.
 """
 
+import queue
 import socket
 import threading
 import time
@@ -14,10 +15,15 @@ import plans
 import tello_net
 
 MIN_BATTERY = 30
-HOVER_SECONDS = 45
+HOVER_SECONDS = 180
 SCAN_SECONDS = 90
 SCAN_STEP = 50
 SCAN_SPEED = 30
+# Small steps, so a reading stays near the pad the pilot just flew over.
+MOVE_LIMITS = {
+    "forward": (20, 50), "back": (20, 50), "left": (20, 50), "right": (20, 50),
+    "up": (20, 40), "down": (20, 40), "cw": (15, 90), "ccw": (15, 90),
+}
 
 
 def scan_points(span: int, step: int = SCAN_STEP) -> list[tuple[int, int]]:
@@ -60,6 +66,7 @@ class PadTester:
         self.message = ""
         self.log: list[str] = []
         self._samples: list[tuple] = []
+        self._moves: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._last_sent = 0.0
 
@@ -79,6 +86,32 @@ class PadTester:
         threading.Thread(target=self._watch, daemon=True).start()
         threading.Thread(target=self._run, daemon=True).start()
         return True
+
+    def move(self, command: str) -> str | None:
+        """Queue one stick command while a hover flight is reading pads."""
+        words = command.split()
+        if len(words) != 2 or words[0] not in MOVE_LIMITS:
+            return "その操作はできません"
+        try:
+            distance = int(words[1])
+        except ValueError:
+            return "その操作はできません"
+        low, high = MOVE_LIMITS[words[0]]
+        if not low <= distance <= high:
+            return "その操作はできません"
+        if self.phase != "flying" or self.mode != "hover":
+            return "読み取り中だけ操作できます"
+        if words[0] == "up" and (self.height or 0) + distance > 110:
+            self.message = "パッドが見える高さより上には上げません"
+            return self.message
+        if words[0] == "down" and self.height is not None and self.height - distance < 30:
+            self.message = "パッドが見える高さより下には下げません"
+            return self.message
+        if self._moves.qsize() >= 2:
+            self.message = "前の操作が終わるまで待ってください"
+            return self.message
+        self._moves.put(f"{words[0]} {distance}")
+        return None
 
     def land(self) -> None:
         """Ask the flight to stop and land. Safe to call when it is already down."""
@@ -184,11 +217,28 @@ class PadTester:
                 sock.close()
 
     def _hover(self) -> None:
-        self.message = "その場で読んでいます。パッドの真ん中の上で番号が出ます"
+        self.message = "読めている間、ボタンか矢印キーで動かせます"
         end = time.monotonic() + HOVER_SECONDS
         while not self._stop.is_set() and time.monotonic() < end:
-            self._keepalive()
-            self._stop.wait(0.4)
+            try:
+                command = self._moves.get(timeout=0.3)
+            except queue.Empty:
+                self._keepalive()
+                continue
+            self.hovering = False
+            reply = self._send(command, 12)
+            self._samples = []  # the next reading has to be from where we stopped
+            self.hovering = True
+            if self._stop.is_set():
+                break
+            if reply == "ok":
+                try:
+                    self.pose = plans.move(self.pose, command)
+                except ValueError:
+                    pass
+            else:
+                self.message = f"{command} は動きませんでした（{reply or '返事なし'}）"
+                self._note(self.message)
         if not self._stop.is_set():
             self._note("時間が来たので着陸します")
 
