@@ -191,49 +191,6 @@ def router_page():
     return render_template("router.html", page="router")
 
 
-@app.post("/api/pads")
-def api_pads():
-    """Save where each mission pad sits. Both PCs need the same numbers."""
-    body = request.get_json(silent=True) or {}
-    return jsonify(pads.save(body.get("pads")))
-
-
-@app.post("/api/pad-test")
-def api_pad_test():
-    """Take off with this player's drone and read the pads under it."""
-    body = request.get_json(silent=True) or {}
-    action = str(body.get("action", ""))
-    if action == "land":
-        tester.land()
-        return jsonify(ok=True, message="着陸します")
-    if action == "emergency":
-        tester.emergency()
-        return jsonify(ok=True, message="緊急停止を送りました")
-    if action == "move":
-        error = tester.move(str(body.get("command", "")))
-        return jsonify(ok=error is None, message=error or "動かします")
-    if runner.phase in ("starting", "flying"):
-        return jsonify(ok=False, message="バトル中は試せません")
-    if tester.busy():
-        return jsonify(ok=False, message="もう飛んでいます")
-    drone = my_drone()
-    if not drone or not drone.get("ip"):
-        return jsonify(ok=False, message="先に「1. ドローンを探す」で自分の機体にして、この画面に戻ってください")
-    if action == "hover":
-        tester.start(drone["ip"], "hover")
-        return jsonify(ok=True, message="離陸します。読めたらボタンか矢印キーで動かせます")
-    if action == "scan":
-        try:
-            span = int(body.get("span", 80))
-        except (TypeError, ValueError):
-            span = 0
-        if not 40 <= span <= 150:
-            return jsonify(ok=False, message="前後左右は40〜150cmにしてください")
-        tester.start(drone["ip"], "scan", span)
-        return jsonify(ok=True, message=f"離陸して、前後左右{span}cmをスキャンします")
-    return jsonify(ok=False, message="操作が分かりません")
-
-
 @app.get("/api/state")
 def api_state():
     ip = tello_net.local_ip()
@@ -274,8 +231,6 @@ def api_state():
         missing=missing_setup(),
         player=tello_net.load_settings().get("player", ""),
         my_drone=my_drone(),
-        pads=pads.public(),
-        pad_test=tester.public(),
         **snapshot,
     )
 
