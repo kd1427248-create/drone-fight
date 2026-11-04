@@ -16,8 +16,8 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
-import pad_test
-import pads
+import scan
+import arena
 import plans
 import tello_net
 
@@ -25,7 +25,12 @@ import tello_net
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True  # screen changes show up without a restart
 state = {"drones": [], "scanned_at": None, "scanning": False, "message": "",
-         "matching": False, "ready": False, "plan": None, "start_at": None, "result": None}
+         "matching": False, "ready": False, "plan": None, "start_at": None, "result": None,
+         # 1-PC mode: this PC flies both drones (A = runner, B = runner2); plan_b is B's plan
+         "local": False, "plan_b": None}
+arena_layout = arena.load()
+if arena_layout:
+    battle.configure_arena(arena_layout)
 BATTLE_SECONDS = 60
 COUNTDOWN_SECONDS = 5
 runner = battle.BattleRunner(
@@ -38,6 +43,7 @@ def opponent_height() -> int | None:
     return ((others[0].get("battle") or {}).get("height")) if others else None
 
 
+scanner = scan.ArenaScanner(runner.monitor, runner.tello_port)
 runner.opponent_height = opponent_height
 
 
@@ -60,16 +66,23 @@ def opponent_raw() -> tuple[dict | None, float]:
 
 
 runner.opponent_raw = opponent_raw
-# Closing the app must never leave the drone flying.
+# The second drone of the 1-PC mode. It shares the first runner's state monitor, and
+# the two see each other directly instead of through the network.
+runner2 = battle.BattleRunner(tello_port=runner.tello_port, monitor=runner.monitor)
+runner2.opponent_height = lambda: runner.public().get("height")
+runner2.opponent_pos = lambda lead=0.0: battle.where_now(runner.public().get("pos"), 0.0, lead)
+runner2.opponent_raw = lambda: (runner.public().get("pos"), 0.0)
+# Closing the app must never leave a drone flying.
 atexit.register(runner.shutdown)
-tester = pad_test.PadTester(runner.monitor)
-atexit.register(tester.shutdown)
+atexit.register(runner2.shutdown)
 lock = threading.Lock()
 
 
-def my_drone() -> dict | None:
-    """The drone this player chose, with its current IP if the last scan found it."""
-    serial = tello_net.load_settings().get("drone_sn")
+def my_drone(key: str = "drone_sn") -> dict | None:
+    """The drone this player chose, with its current IP if the last scan found it.
+
+    key is "drone_sn" (the player's drone, A in the 1-PC mode) or "drone_sn_b" (the 1-PC mode's B)."""
+    serial = tello_net.load_settings().get(key)
     if not serial:
         return None
     with lock:
@@ -80,15 +93,27 @@ def my_drone() -> dict | None:
             "ip": found.get("ip"), "ssid": found.get("ssid"), "battery": battery}
 
 
+def my_drone_b() -> dict | None:
+    return my_drone("drone_sn_b")
+
+
 def missing_setup() -> list[str]:
     settings = tello_net.load_settings()
     labels = {"player": "プレイヤー名", "drone_sn": "自分のドローン", "code": "合言葉"}
     return [label for key, label in labels.items() if not settings.get(key)]
 
 
+def local_peer() -> dict:
+    """In the 1-PC mode the "opponent" is our own second drone, shaped like a network peer
+    so the referee, the opponent tracking and the screens work unchanged (no clock offset)."""
+    return {"player": "B機", "ip": "127.0.0.1", "drone": my_drone_b(), "ready": state["ready"],
+            "battle": runner2.public(), "arena": arena_layout, "arena_hash": arena.fingerprint(arena_layout),
+            "instance": "~", "offset": 0, "local": True}
+
+
 def my_room() -> str | None:
     """Only a fully set-up player who pressed "start matching" joins a room."""
-    if missing_setup() or not state["matching"]:
+    if state["local"] or missing_setup() or not state["matching"]:
         return None
     return tello_net.room_id(tello_net.load_settings().get("code"))
 
@@ -96,16 +121,25 @@ def my_room() -> str | None:
 def public_info() -> dict:
     return {"player": tello_net.load_settings().get("player", ""), "drone": my_drone(),
             "room": my_room(), "ready": state["matching"] and state["ready"],
-            "start_at": state["start_at"], "battle": runner.public()}
+            "start_at": state["start_at"], "battle": runner.public(),
+            "arena": arena_layout, "arena_hash": arena.fingerprint(arena_layout)}
+
+
+def my_role() -> str:
+    """Side A or B on the pad map: the player whose id sorts first is A (it also sets the start time)."""
+    others = room_peers()
+    return "A" if not others or peers.instance < others[0].get("instance", "") else "B"
 
 
 def room_peers() -> list[dict]:
     """Players matching with the same code; the first one is the opponent."""
+    if state["local"]:
+        return [local_peer()]
     room = my_room()
     return [p for p in peers.current() if room and p.get("room") == room]
 
 
-peers = tello_net.PeerFinder(public_info)
+peers = tello_net.PeerFinder(public_info, port=int(os.environ.get("PEER_PORT", tello_net.PEER_PORT)))
 
 PORT = int(os.environ.get("PORT", 5050))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
@@ -215,7 +249,13 @@ def api_state():
         drones=drones,
         # Only players matching with the same 4-digit code are shown.
         peers=[{"player": p.get("player", ""), "ip": p["ip"], "drone": p.get("drone"),
-                "ready": bool(p.get("ready")), "battle": p.get("battle")} for p in room_peers()],
+                "ready": bool(p.get("ready")), "battle": p.get("battle"),
+                "arena_hash": p.get("arena_hash")} for p in room_peers()],
+        local=state["local"],
+        plan_b=state["plan_b"],
+        plan_key_b=battle.plan_key(state["plan_b"]),
+        me_b=runner2.details(),
+        my_drone_b=my_drone_b(),
         matching=state["matching"],
         ready=state["ready"],
         plan=state["plan"],
@@ -223,6 +263,10 @@ def api_state():
         now=tello_net.now(),
         battle_seconds=BATTLE_SECONDS,
         result=state["result"],
+        role=my_role(),
+        arena=arena_layout,
+        arena_scan=scanner.status(),
+        arena_hash=arena.fingerprint(arena_layout),
         me=runner.details(),
         choices=battle.choices(),
         plan_key=battle.plan_key(state["plan"]),
@@ -273,6 +317,8 @@ def api_match():
     player = str(body.get("player", "")).strip()[:20]
     serial = str(body.get("sn", "")).strip()
     code = str(body.get("code", "")).strip()
+    if body.get("local"):
+        return start_local(player or "あなた", serial, str(body.get("sn_b", "")).strip())
     missing = [label for value, label in ((player, "プレイヤー名"), (serial, "自分のドローン"),
                                           (code, "合言葉")) if not value]
     if missing:
@@ -283,8 +329,27 @@ def api_match():
     if message:
         return jsonify(ok=False, message=message)
     tello_net.save_settings(player=player, drone_sn=serial, code=code)
-    state.update(matching=True, ready=False)
+    state.update(matching=True, ready=False, local=False)
     peers.announce()
+    return jsonify(ok=True)
+
+
+def start_local(player: str, serial_a: str, serial_b: str):
+    """1-PC mode: this PC connects to both drones and flies both. No code, no other PC."""
+    if not serial_a or not serial_b:
+        return jsonify(ok=False, message="A機とB機のドローンを両方選んでください")
+    if serial_a == serial_b:
+        return jsonify(ok=False, message="A機とB機には別々のドローンを選んでください")
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="飛んでいる間は切り替えられません")
+    for label, serial in (("A機", serial_a), ("B機", serial_b)):
+        message = claim_drone(serial)
+        if message:
+            return jsonify(ok=False, message=f"{label}: {message}")
+    tello_net.save_settings(player=player, drone_sn=serial_a, drone_sn_b=serial_b)
+    runner.reset()
+    runner2.reset()
+    state.update(matching=True, ready=False, local=True, start_at=None, result=None)
     return jsonify(ok=True)
 
 
@@ -305,11 +370,16 @@ def claim_drone(drone_id: str) -> str | None:
 
 @app.post("/api/claim")
 def api_claim():
-    drone_id = str(request.get_json().get("sn", ""))
+    body = request.get_json()
+    drone_id = str(body.get("sn", ""))
+    slot = "drone_sn_b" if body.get("slot") == "B" else "drone_sn"
+    other = tello_net.load_settings().get("drone_sn" if slot == "drone_sn_b" else "drone_sn_b")
+    if drone_id and drone_id == other:
+        return jsonify(ok=False, message="このドローンはもう一方の機体に選んであります")
     message = claim_drone(drone_id)
     if message:
         return jsonify(ok=False, message=message)
-    tello_net.save_settings(drone_sn=drone_id)
+    tello_net.save_settings(**{slot: drone_id})
     return jsonify(ok=True)
 
 
@@ -317,7 +387,10 @@ def api_claim():
 def api_unmatch():
     if runner.phase in ("starting", "flying"):
         return jsonify(ok=False, message="バトル中はやめられません")
-    state.update(matching=False, ready=False, start_at=None, result=None)
+    if runner2.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="バトル中はやめられません")
+    state.update(matching=False, ready=False, start_at=None, result=None, local=False, plan_b=None)
+    runner2.reset()
     peers.announce()
     return jsonify(ok=True)
 
@@ -325,6 +398,64 @@ def api_unmatch():
 @app.get("/battle")
 def battle_page():
     return render_template("battle.html", page="battle")
+
+
+@app.get("/field")
+def field_page():
+    return render_template("field.html", page="field")
+
+
+def save_scanned_arena(layout: dict) -> None:
+    """A finished scan: store it, fly battles on it and offer it to the opponent."""
+    global arena_layout
+    arena_layout = arena.save(layout)
+    battle.configure_arena(arena_layout)
+    peers.announce()
+
+
+@app.post("/api/arena/scan")
+def api_arena_scan():
+    """Fly our own drone over the pads inside the safe rectangle the player gave.
+
+    'pads' is 8 (pads 1-8, taking off from pad 4) or 4 (the square 1 2 / 3 4, from pad 3).
+    """
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="準備OK・バトル中はスキャンできません")
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    body = request.get_json()
+    pads = body.get("pads", 8)
+    kind = {4: "square4", 8: "pads8"}.get(pads) if isinstance(pads, (int, float)) else None
+    if kind is None:
+        return jsonify(ok=False, message="パッドの枚数は4枚か8枚にしてください")
+    try:
+        field = scan.boundary(*(body.get(k) for k in ("back", "front", "far", "near")))
+    except (ValueError, TypeError) as exc:
+        return jsonify(ok=False, message=str(exc))
+    message = scanner.start(ip, field, save_scanned_arena, kind)
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/arena/simple")
+def api_arena_simple():
+    """No-pad mode: just the start distance and the room around the two drones."""
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying") or scanner.active:
+        return jsonify(ok=False, message="準備OK・バトル中・スキャン中は変えられません")
+    body = request.get_json()
+    try:
+        layout = arena.normalize({"kind": "simple", "distance": body.get("distance"), "back": body.get("back"),
+                                  "side": body.get("side"), "scanned_at": tello_net.now()})
+    except (ValueError, TypeError) as exc:
+        return jsonify(ok=False, message=str(exc))
+    save_scanned_arena(layout)
+    return jsonify(ok=True)
+
+
+@app.post("/api/arena/scan/stop")
+def api_arena_scan_stop():
+    scanner.stop()
+    return jsonify(ok=True)
 
 
 @app.post("/api/plan")
@@ -337,7 +468,12 @@ def api_plan():
         return jsonify(ok=False, message="その作戦は使えません")
     if state["start_at"]:
         return jsonify(ok=False, message="バトルが始まってからは変えられません（モードは下のボタンで切り替え）")
-    state["plan"] = plan
+    if body.get("side") == "B":
+        if not state["local"]:
+            return jsonify(ok=False, message="B機の作戦は1台モードのときだけ選べます")
+        state["plan_b"] = plan
+    else:
+        state["plan"] = plan
     return jsonify(ok=True)
 
 
@@ -357,8 +493,18 @@ def api_ready():
     ready = bool(request.get_json().get("ready"))
     if ready and not state["plan"]:
         return jsonify(ok=False, message="先にモードかファイルを選んでください")
+    if ready and state["local"] and not state["plan_b"]:
+        return jsonify(ok=False, message="B機の作戦も選んでください")
+    if ready and state["local"] and not (my_drone_b() or {}).get("ip"):
+        return jsonify(ok=False, message="B機のドローンのIPがわかりません。「1. ドローンを探す」で探してください")
+    if ready and not arena_layout:
+        return jsonify(ok=False, message="先に8枚のパッドと飛行範囲を実寸で設定してください")
+    if ready and (room_peers()[0].get("arena_hash") != arena.fingerprint(arena_layout)):
+        return jsonify(ok=False, message="相手のフィールド設定と一致していません。同期を待ってください")
     if ready and not (my_drone() or {}).get("ip"):
         return jsonify(ok=False, message="自分のドローンのIPがわかりません。「1. ドローンを探す」で探してください")
+    if ready and scanner.active:
+        return jsonify(ok=False, message="フィールドのスキャン中です")
     if state["start_at"]:
         return jsonify(ok=False, message="もう始まっています")
     state["ready"] = ready
@@ -368,19 +514,25 @@ def api_ready():
 
 @app.post("/api/mode")
 def api_mode():
-    kind, _, name = str(request.get_json().get("key", "")).partition(":")
-    return jsonify(ok=runner.set_mode(kind, name))
+    body = request.get_json()
+    kind, _, name = str(body.get("key", "")).partition(":")
+    target = runner2 if body.get("side") == "B" and state["local"] else runner
+    return jsonify(ok=target.set_mode(kind, name))
 
 
 @app.post("/api/surrender")
 def api_surrender():
     runner.land("降参して着陸")
+    if state["local"]:
+        runner2.land("降参して着陸")
     return jsonify(ok=True)
 
 
 @app.post("/api/emergency")
 def api_emergency():
     runner.emergency()
+    if state["local"]:
+        runner2.emergency()
     return jsonify(ok=True)
 
 
@@ -391,22 +543,24 @@ def api_reset():
     Drone nicknames, the player name and imported files stay. Nothing is reset
     while the drone is in the air.
     """
-    if runner.phase in ("starting", "flying") or tester.busy():
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
         return jsonify(ok=False, message="飛んでいる間はリセットしません")
     runner.reset()
+    runner2.reset()
     with lock:
         state.update(drones=[], scanned_at=None, scanning=False, message="", matching=False,
-                     ready=False, plan=None, start_at=None, result=None)
-    tello_net.save_settings(code="", drone_sn="")
+                     ready=False, plan=None, start_at=None, result=None, local=False, plan_b=None)
+    tello_net.save_settings(code="", drone_sn="", drone_sn_b="")
     peers.announce()
     return jsonify(ok=True)
 
 
 @app.post("/api/rematch")
 def api_rematch():
-    if runner.phase in ("starting", "flying"):
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
         return jsonify(ok=False, message="まだ飛んでいます")
     runner.reset()
+    runner2.reset()
     state.update(ready=False, start_at=None, result=None)
     peers.announce()
     return jsonify(ok=True)
@@ -438,18 +592,40 @@ def decide(me: dict, op: dict | None, now: float) -> dict | None:
 
 def referee() -> None:
     """Start both players together, end on time and decide the winner."""
+    global arena_layout
     last_seen = tello_net.now()
     while True:
         time.sleep(0.2)
         now = tello_net.now()
         others = room_peers()
         op = others[0] if others else None
+        # Use the only scanned map when one PC has it; if both have one, the
+        # newer scan wins (A's map if neither says when it was scanned).
+        theirs, mine = (op or {}).get("arena"), arena_layout
+        newer = bool(theirs) and (not mine or (theirs.get("scanned_at") or 0) > (mine.get("scanned_at") or 0)
+                                  or (not theirs.get("scanned_at") and not mine.get("scanned_at")
+                                      and my_role() == "B"))
+        should_adopt = (op and not state["ready"] and not state["start_at"]
+                        and not scanner.active and newer)
+        if should_adopt:
+            try:
+                incoming = arena.normalize(op["arena"])
+                if arena.fingerprint(incoming) != arena.fingerprint(arena_layout):
+                    arena_layout = arena.save(incoming)
+                    battle.configure_arena(arena_layout)
+                    peers.announce()
+            except (ValueError, TypeError):
+                pass
+        matching_arena = bool(arena_layout and op and op.get("arena_hash") == arena.fingerprint(arena_layout))
+        if state["ready"] and not matching_arena and not state["start_at"]:
+            state["ready"] = False
+            peers.announce()
         # The opponent's times are on their clock; shift them onto ours.
         offset = (op or {}).get("offset", 0)
         if op:
             last_seen = now
         # 1) Both ready: the player with the smaller id sets the start time for both.
-        if state["ready"] and op and op.get("ready") and not state["start_at"]:
+        if state["ready"] and op and op.get("ready") and matching_arena and not state["start_at"]:
             if peers.instance < op.get("instance", ""):
                 state["start_at"] = now + COUNTDOWN_SECONDS
                 peers.announce()
@@ -463,9 +639,18 @@ def referee() -> None:
             peers.announce()
         # 2) Take off at the agreed moment.
         if runner.phase == "idle" and now >= start_at and not state["result"]:
+            if not matching_arena:
+                state.update(ready=False, start_at=None)
+                peers.announce()
+                continue
             drone = my_drone() or {}
-            if drone.get("ip") and state["plan"]:
-                runner.start(drone["ip"], state["plan"])
+            if state["local"]:
+                drone_b = my_drone_b() or {}
+                if drone.get("ip") and drone_b.get("ip") and state["plan"] and state["plan_b"]:
+                    runner.start(drone["ip"], state["plan"], "A")
+                    runner2.start(drone_b["ip"], state["plan_b"], "B")
+            elif drone.get("ip") and state["plan"]:
+                runner.start(drone["ip"], state["plan"], my_role())
         if state["result"] or runner.phase == "idle":
             continue
         # 3) Decide.
@@ -481,6 +666,8 @@ def referee() -> None:
         if result:
             state["result"] = result
             runner.land("勝負がついたので着陸")
+            if state["local"]:
+                runner2.land("勝負がついたので着陸")
             peers.announce()
 
 

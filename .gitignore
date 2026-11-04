@@ -4,5 +4,9 @@ __pycache__/
 # per-player data (name, drone serial numbers)
 settings.json
 drones.json
+arena.json
 # imported battle files (examples live in examples/)
 plans/
+# local hand-off notes (they hold this LAN's addresses)
+CLAUDE_HANDOFF.md
+WORK_STATUS.md
