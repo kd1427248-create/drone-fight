@@ -106,6 +106,20 @@ class LocalModeTest(unittest.TestCase):
         tello_app.runner.pose = (10.0, 20.0, 0.0, 0)
         self.assertEqual(tello_app.runner2.opponent_raw()[0]["x"], 10)
 
+    def test_a_lean_reaches_only_the_drone_on_gesture_mode(self):
+        a, b = tello_app.runner, tello_app.runner2
+        a.phase, a.plan = "flying", {"kind": "mode", "name": "6_gesture"}
+        b.phase, b.plan = "flying", {"kind": "mode", "name": "1_attack"}
+        try:
+            got = post(self.client, "/api/gesture", {"right": -1, "forward": 1})
+            self.assertTrue(got["ok"])
+            self.assertEqual(a.lean, (-1, 1))
+            self.assertEqual(b.lean, (0, 0))
+            self.assertFalse(post(self.client, "/api/gesture", {"right": 2, "forward": 0})["ok"])
+        finally:
+            a._reset()
+            b._reset()
+
 
 if __name__ == "__main__":
     unittest.main()

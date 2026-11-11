@@ -194,6 +194,48 @@ def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None,
     return plans.go_command(max(-50, min(50, mx - x)), max(-50, min(50, my - y)), 0, heading, 100), False
 
 
+GESTURE_STEP = 40    # cm of one lean
+GESTURE_SPEED = 60
+GESTURE_STALE = 0.7  # s without a new lean: hover, so a closed camera cannot keep flying
+
+
+def gesture_label(right: int, forward: int) -> str:
+    parts = []
+    if forward > 0:
+        parts.append("前")
+    elif forward < 0:
+        parts.append("後ろ")
+    if right > 0:
+        parts.append("右")
+    elif right < 0:
+        parts.append("左")
+    return "".join(parts)
+
+
+def gesture_step(me: tuple, right: int, forward: int) -> str | None:
+    """One hop along the nose: forward is the way it faces, right is its right.
+
+    right and forward are -1, 0 or 1. None when the player is upright, or when
+    every hop that fits the lean would leave the field.
+    """
+    if right not in (-1, 0, 1) or forward not in (-1, 0, 1) or (right == 0 and forward == 0):
+        return None
+    x, y, _, heading = me
+    rad = math.radians(heading)
+    for scale in (1, 0.75, 0.5):
+        ahead = forward * GESTURE_STEP * scale
+        side = right * GESTURE_STEP * scale
+        dx = ahead * math.cos(rad) - side * math.sin(rad)
+        dy = ahead * math.sin(rad) + side * math.cos(rad)
+        command = plans.go_command(dx, dy, 0, heading, GESTURE_SPEED)
+        if command is None:
+            continue
+        landed = plans.move(me, command)
+        if in_field(landed[0], landed[1], 20):
+            return command
+    return None
+
+
 FLIP_MIN_BATTERY = 50  # Tello refuses flips below this
 FLIP_MIN_HEIGHT = 70
 
@@ -295,12 +337,24 @@ def plan_key(plan: dict | None) -> str | None:
     return f"{plan['kind']}:{plan['name']}" if plan else None
 
 
+def uses_gesture(plan: dict | None) -> bool:
+    """True when this mode or file moves by the player's lean instead of a script."""
+    if not plan:
+        return False
+    try:
+        return "gesture" in plan_lines(plan["kind"], plan["name"])
+    except (ValueError, OSError):
+        return False
+
+
 def choices() -> list[dict]:
     """Everything a player can pick: the built-in modes, then imported files."""
     return ([{"key": f"mode:{m['id']}", "title": m["name"], "description": m["description"],
-              "imported": False} for m in modes()]
+              "imported": False, "gesture": uses_gesture({"kind": "mode", "name": m["id"]})}
+             for m in modes()]
             + [{"key": f"plan:{p['name']}", "title": p["title"], "description": p["description"],
-                "imported": True} for p in plans.list_plans()])
+                "imported": True, "gesture": uses_gesture({"kind": "plan", "name": p["name"]})}
+               for p in plans.list_plans()])
 
 
 def plan_lines(kind: str, name: str) -> list[str]:
@@ -360,6 +414,8 @@ class BattleRunner:
         self.stop_reason: str | None = None
         self.stop_event = threading.Event()
         self.sock: socket.socket | None = None
+        self.lean = (0, 0)   # (right, forward), each -1, 0 or 1, from the player's camera
+        self.lean_at = 0.0
 
     # ---- public API -------------------------------------------------------
     def start(self, ip: str, plan: dict, role: str = "A") -> None:
@@ -385,6 +441,18 @@ class BattleRunner:
         self.plan = {"kind": kind, "name": name}
         self._note(f"モード変更: {self._plan_label()}")
         return True
+
+    def set_lean(self, right: int, forward: int) -> None:
+        """Remember the latest lean. The flight thread reads it; this is called from HTTP."""
+        with self.lock:
+            self.lean = (right, forward)
+            self.lean_at = time.monotonic()
+
+    def _lean(self) -> tuple[int, int, bool]:
+        with self.lock:
+            right, forward = self.lean
+            fresh = time.monotonic() - self.lean_at <= GESTURE_STALE
+        return right, forward, fresh
 
     def land(self, reason: str) -> None:
         """Stop the plan and land (surrender, time up, result decided, app exit)."""
@@ -594,6 +662,17 @@ class BattleRunner:
                     if line is None:
                         self._wait_watching()  # already as far away as we can be
                         continue
+                if line == "gesture":
+                    right, forward, fresh = self._lean()
+                    hopped = gesture_step(self.pose, right, forward) if fresh else None
+                    if hopped is None:
+                        self._wait_watching()  # upright, stale, or the hop would leave the field
+                        continue
+                    label = gesture_label(right, forward)
+                    if label != getattr(self, "_gesture_label", None):
+                        self._gesture_label = label
+                        self._note(f"身振り: {label}")
+                    line = hopped
                 if line == "match_height":
                     # Only trust a height measured after the last move, so a stale
                     # reading can never make it climb again and again.

@@ -436,6 +436,13 @@ function renderField(s) {
   }
 }
 
+function gestureWanted(s) {
+  const keys = s.start_at
+    ? [s.me && s.me.plan_key, s.local ? s.me_b && s.me_b.plan_key : null]
+    : [s.plan_key, s.local ? s.plan_key_b : null];
+  return keys.some((key) => key && (s.choices.find((c) => c.key === key) || {}).gesture);
+}
+
 function renderBattle(s) {
   const opponent = s.matching ? s.peers[0] : null;
   $("no-match").hidden = !!opponent;
@@ -443,7 +450,10 @@ function renderBattle(s) {
   $("room-part2").hidden = !opponent;
   $("arena-status").hidden = !!s.start_at;
   $("arena-sync").textContent = arenaSyncText(s, opponent);
-  if (!opponent) return;
+  if (!opponent) {
+    if (window.Gesture) Gesture.setVisible(false, false);
+    return;
+  }
   setPlayerCard("me", s.local ? "A機" : s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
   const whoLabels = document.querySelectorAll(".room-card .who");
@@ -488,6 +498,7 @@ function renderBattle(s) {
     $("ready").disabled = !s.plan || (s.local && !s.plan_b) || (!s.ready && (!s.arena || opponent.arena_hash !== s.arena_hash));
     $("room-status").textContent = planText + " ／ " + (s.ready && opponent.ready ? "まもなくスタート！"
       : s.ready ? "相手の準備を待っています…" : "準備ができたら「準備OK」を押してください");
+    if (window.Gesture) Gesture.setVisible(gestureWanted(s), false);
     return;
   }
 
@@ -541,6 +552,7 @@ function renderBattle(s) {
     $("result-reason").textContent = s.local ? s.result.reason.replaceAll("相手", "B機").replaceAll("自分", "A機") : s.result.reason;
     $("rematch").disabled = up(s.me) || (s.local && up(s.me_b));
   }
+  if (window.Gesture) Gesture.setVisible(gestureWanted(s) && !finished, !finished);
 }
 
 let started = false;  // no screen updates until a reload's reset has finished

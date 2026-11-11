@@ -154,3 +154,7 @@
   .pad-badge { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .pad-badge.some { border-color: #f5a524; color: #b45309; }
   .pad-badge.on { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+
+  #gesture-view { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  #gesture-video { width: 240px; height: 180px; object-fit: cover; border-radius: 10px; background: #000;
+                   transform: scaleX(-1); }

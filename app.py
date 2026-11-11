@@ -7,6 +7,7 @@ same moment and decides the winner: the drone still in the air at the end.
 """
 
 import atexit
+import mimetypes
 import os
 import re
 import threading
@@ -20,6 +21,9 @@ import scan
 import arena
 import plans
 import tello_net
+
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/wasm", ".wasm")
 
 
 app = Flask(__name__)
@@ -473,6 +477,22 @@ def api_mode():
     kind, _, name = str(body.get("key", "")).partition(":")
     target = runner2 if body.get("side") == "B" and state["local"] else runner
     return jsonify(ok=target.set_mode(kind, name))
+
+
+@app.post("/api/gesture")
+def api_gesture():
+    """The latest lean from this PC's camera. Only a drone on the gesture mode hears it."""
+    body = request.get_json(silent=True) or {}
+    try:
+        right, forward = int(body.get("right", 0)), int(body.get("forward", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, message="向きがわかりません")
+    if right not in (-1, 0, 1) or forward not in (-1, 0, 1):
+        return jsonify(ok=False, message="向きがわかりません")
+    for who in (runner, runner2):
+        if who.phase in ("starting", "flying") and battle.uses_gesture(who.plan):
+            who.set_lean(right, forward)
+    return jsonify(ok=True)
 
 
 @app.post("/api/surrender")
