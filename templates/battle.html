@@ -29,10 +29,43 @@
     </div>
   </section>
 
+  <!-- the pad arena: where to put the pads and the drones, and where they are during the battle -->
+  <section class="card arena">
+    <div class="arena-map" id="arena-map"></div>
+    <div class="arena-help">
+      <h2>フィールド（ミッションパッド）</h2>
+      <p id="role-line" class="role-line"></p>
+      <p class="muted" id="arena-kind-help"></p>
+    </div>
+  </section>
+</div>
+  <section class="card" id="arena-status">
+    <div class="row" style="justify-content:space-between">
+      <p id="arena-sync" class="muted" style="margin:0"></p>
+      <a class="button ghost" href="{{ url_for('field_page') }}">フィールドを設定 →</a>
+    </div>
+  </section>
+
+<div id="room-part2" hidden>
+
+  <section class="card" id="gesture-card" hidden>
+    <h2>手振りで動かす</h2>
+    <p class="muted" style="margin-top:0">片手をカメラに映してください。右に出すと右、上げると機首の方向へ一歩動きます。手を止めると止まります。手振りモードの機体だけが動きます。</p>
+    <button type="button" id="gesture-cam">カメラをオン</button>
+    <div id="gesture-view" hidden>
+      <video id="gesture-video" playsinline muted></video>
+      <p id="gesture-status" class="muted"></p>
+    </div>
+  </section>
+
   <!-- before the battle: choose a mode or a file, then get ready -->
   <section class="card" id="setup">
     <div class="picker-head">
       <h2>作戦を選ぶ</h2>
+      <div class="segment" id="side-switch" role="tablist" hidden>
+        <button role="tab" data-side="A" class="on">A機の作戦</button>
+        <button role="tab" data-side="B">B機の作戦</button>
+      </div>
       <div class="segment" role="tablist">
         <button role="tab" data-view="modes" class="on">モード</button>
         <button role="tab" data-view="import">ファイルインポート</button>
@@ -49,7 +82,7 @@
     <div class="row" style="justify-content:center">
       <button id="ready" class="big-button">準備OK</button>
     </div>
-    <p class="muted" style="text-align:center;margin:10px 0 0">2人とも準備OKになると5秒後に同時に離陸します。最後まで飛んでいた方が勝ち（制限時間<span id="limit"></span>秒）。</p>
+    <p class="muted" style="text-align:center;margin:10px 0 0"><span id="start-help">2人とも準備OKになると5秒後に同時に離陸します。</span>最後まで飛んでいた方が勝ち（制限時間<span id="limit"></span>秒）。</p>
   </section>
 
   <!-- countdown and the battle itself -->
@@ -58,10 +91,11 @@
     <div id="fight" hidden>
       <p class="timer" id="timer"></p>
       <div class="live-grid">
-        <div><span class="muted">あなた</span><b id="me-state"></b><span class="muted" id="me-pad"></span><span class="muted" id="me-plan"></span></div>
-        <div><span class="muted">相手</span><b id="op-state"></b><span class="muted" id="op-pad"></span><span class="muted" id="op-plan"></span></div>
+        <div><span class="muted">あなた</span><b id="me-state"></b><span class="muted" id="me-plan"></span></div>
+        <div><span class="muted">相手</span><b id="op-state"></b><span class="muted" id="op-plan"></span></div>
       </div>
       <div id="mode-switch" class="row" style="justify-content:center;margin-top:14px"></div>
+      <div id="mode-switch-b" class="row" style="justify-content:center;margin-top:8px" hidden></div>
       <div class="row" style="justify-content:center;margin-top:14px">
         <button class="ghost" id="surrender">降参（着陸）</button>
         <button class="stop" id="emergency">緊急停止（プロペラ停止）</button>
@@ -89,4 +123,5 @@
   <a class="button ghost" href="{{ url_for('peers_page') }}">← マッチングに戻る</a>
   <span></span>
 </div>
+<script src="{{ url_for('static', filename='gesture.js') }}"></script>
 {% endblock %}

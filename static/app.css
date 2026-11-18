@@ -126,3 +126,35 @@
   .segment button { background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 14px; font-size: 13px; }
   .segment button.on { background: var(--accent); color: var(--accent-text); }
   [hidden] { display: none !important; }  /* grids and flex boxes must still hide */
+
+  .arena { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .arena-map svg { display: block; max-width: 100%; height: auto; }
+  .arena-help { flex: 1; min-width: 240px; }
+  .arena-help ol { padding-left: 20px; margin: 8px 0; font-size: 14px; }
+  .role-line { font-weight: 700; color: var(--accent); margin: 0; }
+  .arena-map .field { fill: var(--bg); stroke: var(--line); stroke-width: 2; }
+  .arena-map .pad { fill: #1d2330; }
+  .arena-map .pad-id { fill: #fff; font: 700 15px sans-serif; text-anchor: middle; }
+  .arena-map .rocket { fill: #f5a524; font: 11px sans-serif; text-anchor: middle; }
+  .arena-map .side { fill: var(--muted); font: 600 12px sans-serif; text-anchor: middle; }
+  .arena-map circle.me { fill: var(--accent); }
+  .arena-map circle.op { fill: #d92d20; }
+  .arena-map line.heading { stroke-width: 3; }
+  .arena-map line.me { stroke: var(--accent); }
+  .arena-map line.op { stroke: #d92d20; }
+  .arena-map .label { fill: var(--text); font: 600 11px sans-serif; text-anchor: middle; }
+  .arena-map { max-width: 100%; overflow-x: auto; }
+  .scan-viewport { max-height: 75vh; overflow: auto; margin: 12px 0; }
+  #scan-canvas { display: block; max-width: none; height: auto; cursor: crosshair; border-radius: 8px; }
+
+  .steps-list { padding-left: 20px; font-size: 14px; }
+  .bounds { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .bounds label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .pad-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .pad-badge { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .pad-badge.some { border-color: #f5a524; color: #b45309; }
+  .pad-badge.on { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+
+  #gesture-view { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  #gesture-video { width: 240px; height: 180px; object-fit: cover; border-radius: 10px; background: #000;
+                   transform: scaleX(-1); }

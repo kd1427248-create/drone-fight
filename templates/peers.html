@@ -2,13 +2,18 @@
 {% block content %}
 <section class="card">
   <h2>マッチング</h2>
+  <div class="segment" role="tablist" style="margin-bottom:12px">
+    <button role="tab" data-local="0" class="on">2台のPCで対戦</button>
+    <button role="tab" data-local="1">1台のPCで2台を動かす</button>
+  </div>
   <div class="row">
     <label>プレイヤー名 <input id="player" placeholder="例: ゆーしん" maxlength="20" size="14"></label>
-    <label>自分のドローン <select id="my-drone"></select></label>
-    <label>合言葉 <input id="code" placeholder="4桁の数字" maxlength="4" size="9"
+    <label><span id="my-drone-label">自分のドローン</span> <select id="my-drone"></select></label>
+    <label id="drone-b-label" hidden>B機のドローン <select id="my-drone-b"></select></label>
+    <label id="code-label">合言葉 <input id="code" placeholder="4桁の数字" maxlength="4" size="9"
                        inputmode="numeric" pattern="[0-9]{4}" autocomplete="off"></label>
   </div>
-  <p class="muted" style="margin:10px 0 0">相手と同じ4桁の合言葉を入れて「マッチング開始」を押します。</p>
+  <p class="muted" style="margin:10px 0 0" id="match-help">相手と同じ4桁の合言葉を入れて「マッチング開始」を押します。</p>
   <div class="row" style="margin-top:14px">
     <button id="match">マッチング開始</button>
     <button class="ghost" id="unmatch" hidden>マッチングをやめる</button>

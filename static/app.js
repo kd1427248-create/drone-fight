@@ -32,17 +32,26 @@ function renderHeader(s) {
 function renderDrones(s) {
   // On a Tello's own Wi-Fi, offer the router setup right here.
   $("join-card").hidden = !(s.mode === "direct" && s.drones.length);
+  const fly = s.gesture_fly || { phase: "idle", message: "" };
+  const flying = fly.phase === "starting" || fly.phase === "flying";
+  if ($("gesture-card")) {
+    $("gesture-card").hidden = !s.my_drone;
+    $("gesture-fly-msg").textContent = fly.message || "";
+    $("gesture-go").hidden = flying;
+    $("gesture-land").hidden = !flying;
+    if (window.Gesture) Gesture.setVisible(!!s.my_drone, flying);
+  }
   $("scan").disabled = s.scanning;
   $("scan-msg").textContent = s.message + (s.scanned_at ? "（" + s.scanned_at + "）" : "");
   if (editing) return;
   $("drones").innerHTML = s.drones.length ? "" :
-    '<tr><td colspan="4" class="muted">' +
+    '<tr><td colspan="5" class="muted">' +
     (s.scanned_at ? "見つかりませんでした。電源・Wi-Fiを確認してください" : "まだ探していません") + "</td></tr>";
   for (const d of s.drones) {
     const tr = document.createElement("tr");
     tr.innerHTML = '<td><input maxlength="20" placeholder="例: ゆーしん機"><div class="saved muted"></div></td>' +
       '<td class="mono"></td><td></td>' +
-      '<td><button class="ghost claim"></button></td>';
+      '<td><button class="ghost claim"></button></td><td><button class="ghost claim-b"></button></td>';
     const input = tr.querySelector("input");
     const saved = tr.querySelector(".saved");
     input.value = d.name;
@@ -75,11 +84,37 @@ function renderDrones(s) {
       saved.textContent = r.ok ? "つなぎました ✓" : r.message;
       setTimeout(() => { editing = false; refresh(); }, r.ok ? 800 : 6000);
     });
+    const isB = s.my_drone_b && s.my_drone_b.sn === d.sn;
+    const claimB = tr.querySelector(".claim-b");
+    claimB.textContent = isB ? "B機 ✓" : "B機にする";
+    claimB.className = isB ? "claim-b" : "ghost claim-b";
+    claimB.title = "1台のPCで2台を動かすときの、2台目の機体";
+    claimB.addEventListener("click", async () => {
+      claimB.textContent = "つないでいます…";
+      claimB.disabled = true;
+      editing = true;
+      const r = await post("/api/claim", { sn: d.sn, slot: "B" });
+      saved.className = r.ok ? "saved muted" : "saved error";
+      saved.textContent = r.ok ? "B機につなぎました ✓" : r.message;
+      setTimeout(() => { editing = false; refresh(); }, r.ok ? 800 : 6000);
+    });
     $("drones").appendChild(tr);
   }
 }
 
 let meLoaded = false;
+let localMode = false;  // the matching form: false = two PCs, true = one PC flying both drones
+
+function showLocalMode(on) {
+  localMode = on;
+  for (const b of document.querySelectorAll(".segment [data-local]")) b.classList.toggle("on", (b.dataset.local === "1") === on);
+  $("drone-b-label").hidden = !on;
+  $("code-label").hidden = on;
+  $("my-drone-label").textContent = on ? "A機のドローン" : "自分のドローン";
+  $("match-help").textContent = on
+    ? "1台のPCでA機・B機の2台を動かします。合言葉も相手のPCも要りません。"
+    : "相手と同じ4桁の合言葉を入れて「マッチング開始」を押します。";
+}
 
 function droneText(d) {
   if (!d) return "ドローン未選択";
@@ -87,16 +122,26 @@ function droneText(d) {
 }
 
 function renderPeers(s) {
-  if (!meLoaded) { $("player").value = s.player; $("code").value = s.code; meLoaded = true; }
+  if (!meLoaded) {
+    $("player").value = s.player; $("code").value = s.code; meLoaded = true;
+    showLocalMode(s.local);
+  }
+  if (s.matching && s.local !== localMode) showLocalMode(s.local);
   // Drones from the last scan, plus the saved one even if it is not found right now.
   const options = [["", "選んでください"]].concat(s.drones.map((d) => [d.sn, droneLabel(d)]));
   if (s.my_drone && !s.drones.some((d) => d.sn === s.my_drone.sn)) {
     options.push([s.my_drone.sn, (s.my_drone.name || s.my_drone.sn) + "（今は見つかっていません）"]);
   }
   if (fillSelect($("my-drone"), options) && s.my_drone) $("my-drone").value = s.my_drone.sn;
+  const optionsB = [["", "選んでください"]].concat(s.drones.map((d) => [d.sn, droneLabel(d)]));
+  if (s.my_drone_b && !s.drones.some((d) => d.sn === s.my_drone_b.sn)) {
+    optionsB.push([s.my_drone_b.sn, (s.my_drone_b.name || s.my_drone_b.sn) + "（今は見つかっていません）"]);
+  }
+  if (fillSelect($("my-drone-b"), optionsB) && s.my_drone_b) $("my-drone-b").value = s.my_drone_b.sn;
 
   // Inputs are locked while matching.
-  for (const id of ["player", "my-drone", "code"]) $(id).disabled = s.matching;
+  for (const id of ["player", "my-drone", "my-drone-b", "code"]) $(id).disabled = s.matching;
+  for (const b of document.querySelectorAll(".segment [data-local]")) b.disabled = s.matching;
   $("match").hidden = s.matching;
   $("unmatch").hidden = !s.matching;
   $("status").hidden = !s.matching;
@@ -106,7 +151,7 @@ function renderPeers(s) {
   $("matched").hidden = !opponent;
   $("waiting-detail").textContent = "合言葉「" + s.code + "」で探しています。相手にも同じ合言葉でマッチングを始めてもらってください";
   if (opponent) {
-    $("me-name").textContent = s.player;
+    $("me-name").textContent = s.local ? "A機" : s.player;
     $("me-drone").textContent = droneText(s.my_drone);
     $("op-name").textContent = opponent.player || "名前なし";
     $("op-drone").textContent = droneText(opponent.drone);
@@ -131,6 +176,9 @@ function fillSelect(select, options) {
 // ---- battle room ----
 const STATE_TEXT = { idle: "待機中", starting: "離陸中…", flying: "飛行中", down: "地面に落ちた", landed: "着陸" };
 
+let side = "A";  // 1-PC mode: whose plan the picker is showing ("A" or "B")
+const planKey = (s) => (s.local && side === "B" ? s.plan_key_b : s.plan_key);
+
 function setPlayerCard(prefix, name, drone, ready) {
   $(prefix + "-name").textContent = name || "名前なし";
   $(prefix + "-drone").textContent = drone ? (drone.name || "名前なし") : "ドローン未選択";
@@ -143,7 +191,7 @@ function setPlayerCard(prefix, name, drone, ready) {
 
 function choiceCard(c, s, onPick) {
   const card = document.createElement("div");
-  card.className = "mode-card" + (c.key === s.plan_key ? " on" : "") + (c.imported ? " imported" : "");
+  card.className = "mode-card" + (c.key === planKey(s) ? " on" : "") + (c.imported ? " imported" : "");
   card.tabIndex = 0;
   card.innerHTML = "<b></b><span></span>";
   card.children[0].textContent = c.title;
@@ -157,7 +205,7 @@ let view = null;  // "modes" or "import": which list the top-right switch shows
 
 function showView(name) {
   view = name;
-  for (const b of document.querySelectorAll(".segment button")) {
+  for (const b of document.querySelectorAll(".segment button[data-view]")) {
     b.classList.toggle("on", b.dataset.view === name);
     b.setAttribute("aria-selected", String(b.dataset.view === name));
   }
@@ -168,11 +216,11 @@ function showView(name) {
 function renderModes(s) {
   if (view === null) {
     // First time: open the side that holds the current choice.
-    const chosen = s.choices.find((c) => c.key === s.plan_key);
+    const chosen = s.choices.find((c) => c.key === planKey(s));
     showView(chosen && chosen.imported ? "import" : "modes");
   }
 
-  const sig = JSON.stringify([s.choices, s.plan_key, s.ready]);
+  const sig = JSON.stringify([s.choices, planKey(s), s.ready, side]);
   if ($("mode-list").dataset.sig === sig) return;
   $("mode-list").dataset.sig = sig;
 
@@ -231,7 +279,7 @@ async function importFile(file) {
 }
 
 async function choosePlan(kind, name) {
-  const r = await post("/api/plan", { kind, name });
+  const r = await post("/api/plan", { kind, name, side });
   if (!r.ok) $("room-status").textContent = r.message;
   refresh();
 }
@@ -247,22 +295,198 @@ function droneState(b) {
   return (STATE_TEXT[b.phase] || b.phase) + (b.airborne && b.height != null ? "（高さ " + b.height + "cm）" : "");
 }
 
-function padText(b) {
-  if (!b || (b.phase !== "flying" && b.phase !== "starting")) return "";
-  if (b.abs && b.pos) return "パッド" + b.pad + "で位置を認識（前 " + b.pos.x + "cm・右 " + b.pos.y + "cm）";
-  if (b.seeing) return "パッド" + b.seeing + "が見えています（位置が未登録）";
-  return b.phase === "flying" ? "パッドは見えていません" : "";
+// ---- the pad arena map (screen right = the rockets' direction, A to B) ----
+// pads: {id: [x, y]}; drones: [{pos: {x, y, heading, pad}, cls, label}]
+function drawMap(el, field, pads, starts, drones) {
+  const [xMin, xMax, yMin, yMax] = field;
+  const scale = Math.min(1.6, 500 / Math.max(xMax - xMin, yMax - yMin));
+  const W = (xMax - xMin) * scale, H = (yMax - yMin) * scale;
+  const sx = (x) => (x - xMin) * scale, sy = (y) => (y - yMin) * scale;
+  const pad = 19.5 * scale;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="フィールドの地図">`;
+  svg += `<rect x="0" y="0" width="${W}" height="${H}" class="field"/>`;
+  for (const [id, xy] of Object.entries(pads)) {
+    if (!xy) continue;
+    const [x, y] = xy;
+    svg += `<rect x="${sx(x) - pad / 2}" y="${sy(y) - pad / 2}" width="${pad}" height="${pad}" rx="4" class="pad"/>`;
+    svg += `<text x="${sx(x)}" y="${sy(y) + 5}" class="pad-id">${id}</text>`;
+    svg += `<text x="${sx(x) + pad / 2 + 8}" y="${sy(y) + 4}" class="rocket">▶</text>`;
+  }
+  for (const [side, [x, y]] of Object.entries(starts || {})) {
+    svg += `<text x="${sx(x)}" y="${sy(y) + (side === "A" ? 24 : -14)}" class="side">${side}側</text>`;
+  }
+  for (const d of drones) {
+    if (!d.pos) continue;
+    const rad = (d.pos.heading || 0) * Math.PI / 180;
+    const hx = sx(d.pos.x + Math.cos(rad) * 18), hy = sy(d.pos.y + Math.sin(rad) * 18);
+    svg += `<line x1="${sx(d.pos.x)}" y1="${sy(d.pos.y)}" x2="${hx}" y2="${hy}" class="${d.cls} heading"/>` +
+      `<circle cx="${sx(d.pos.x)}" cy="${sy(d.pos.y)}" r="9" class="${d.cls}"/>` +
+      `<text x="${sx(d.pos.x)}" y="${sy(d.pos.y) - 13}" class="label">${d.label}${d.pos.pad ? "（パッド" + d.pos.pad + "）" : ""}</text>`;
+  }
+  el.innerHTML = svg + "</svg>";
+}
+
+function drawArena(s, opponent) {
+  const a = s.arena;
+  if (!a) {
+    $("arena-map").textContent = "まだ地図がありません。「フィールド」画面でスキャンしてください";
+    return;
+  }
+  const flying = (b) => b && ["starting", "flying"].includes(b.phase);
+  drawMap($("arena-map"), a.field, a.pads, a.starts, [
+    { pos: flying(opponent && opponent.battle) ? opponent.battle.pos : null, cls: "op", label: s.local ? "B機" : "相手" },
+    { pos: flying(s.me) ? s.me.pos : null, cls: "me", label: s.local ? "A機" : "あなた" },
+  ]);
+}
+
+function arenaSyncText(s, opponent) {
+  if (!s.arena) return "フィールドの設定がありません。「フィールド」画面で設定するまで準備OKに進めません。";
+  if (!opponent) return "このPCに地図を保存済みです。マッチすると相手と同じ地図にそろえます。";
+  return opponent.arena_hash === s.arena_hash ? "両PCの地図は一致しています。"
+    : "相手PCと地図をそろえています。一致するまで準備OKに進めません。";
+}
+
+// ---- フィールド page: the scan ----
+const PHASE_TITLE = { idle: "まだスキャンしていません", running: "スキャン中…", done: "スキャン完了", failed: "スキャン失敗" };
+
+let fieldKind = null;  // which tab the フィールド page shows: "pads" or "simple"
+let simpleLoaded = false;
+
+let padCount = null;  // how many pads the scan form is set up for: 4 (square 1 2 / 3 4) or 8
+
+function showPadCount(n) {
+  padCount = n;
+  for (const b of document.querySelectorAll(".segment [data-pads]")) b.classList.toggle("on", Number(b.dataset.pads) === n);
+  for (const ol of document.querySelectorAll("[data-for]")) ol.hidden = Number(ol.dataset.for) !== n;
+  document.querySelector(".pad-count").textContent = n;
+  document.querySelector(".far-pads").textContent = n === 4 ? "パッド1・2" : "パッド1〜3";
+  document.querySelector(".near-note").textContent = n === 4 ? "（パッドはありません。安全な余白）" : "（パッド7・8の側）";
+}
+
+// The pad a side takes off from: the pad nearest that side's start on the saved map.
+function startPad(arena, role) {
+  const [sx, sy] = arena.starts[role];
+  return Object.entries(arena.pads).reduce((best, [id, [x, y]]) => {
+    const d = Math.hypot(x - sx, y - sy);
+    return !best || d < best[1] ? [id, d] : best;
+  }, null)[0];
+}
+
+function showFieldKind(kind) {
+  fieldKind = kind;
+  for (const b of document.querySelectorAll(".segment [data-kind]")) b.classList.toggle("on", b.dataset.kind === kind);
+  $("pads-card").hidden = kind !== "pads";
+  $("simple-card").hidden = kind !== "simple";
+  $("pad-badges").hidden = kind !== "pads";
+}
+
+function renderField(s) {
+  const sc = s.arena_scan;
+  const running = sc.phase === "running";
+  const savedKind = s.arena ? (s.arena.kind === "simple" ? "simple" : "pads") : null;
+  if (fieldKind === null) showFieldKind(running ? "pads" : (savedKind || "pads"));
+  if (padCount === null) {
+    const saved = s.arena && savedKind === "pads" ? Object.keys(s.arena.pads).length : 0;
+    showPadCount(running ? Object.keys(sc.pads).length : (saved === 8 ? 8 : 4));
+  }
+  const savedPads = s.arena && savedKind === "pads" ? Object.keys(s.arena.pads).length : 0;
+  $("kind-note").textContent = !s.arena ? "まだ設定がありません。どちらかで設定するまで準備OKに進めません。" :
+    savedKind === "simple" ? `今の設定：パッドなし（2台の距離 ${s.arena.distance}cm）。相手の位置は予想です。` :
+    `今の設定：パッドで正確に（スキャンした${savedPads}枚の地図）。`;
+  for (const b of document.querySelectorAll(".segment [data-pads]")) b.disabled = running;
+  if (s.arena && savedKind === "simple" && !simpleLoaded) {
+    $("s-distance").value = s.arena.distance; $("s-back").value = s.arena.back; $("s-side").value = s.arena.side;
+    simpleLoaded = true;
+  }
+  for (const b of document.querySelectorAll(".segment [data-kind]")) b.disabled = running;
+  $("simple-save").disabled = running || s.ready;
+  if (fieldKind === "simple") {
+    $("scan-title").textContent = savedKind === "simple" ? "保存済みの設定（パッドなし）" : "パッドなしの設定はまだありません";
+    $("scan-title").className = "";
+    $("scan-progress").textContent = "";
+    $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
+    if (savedKind === "simple") drawMap($("scan-map"), s.arena.field, {}, s.arena.starts, []);
+    else $("scan-map").textContent = "下で距離を入れて保存すると、ここに出ます";
+    return;
+  }
+  $("scan-start").hidden = running;
+  $("scan-stop").hidden = !running;
+  for (const id of ["b-back", "b-front", "b-far", "b-near"]) $(id).disabled = running;
+  $("scan-title").textContent = sc.phase === "idle" && s.arena ? "保存済みの地図" : PHASE_TITLE[sc.phase];
+  $("scan-title").className = sc.phase === "failed" ? "error" : sc.phase === "done" ? "ok-text" : "";
+  $("scan-progress").textContent = sc.phase === "idle" ? "" :
+    (running ? `止まって読んだ場所 ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）` : sc.message);
+  $("scan-log").textContent = sc.log.join("\n");
+  $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
+
+  const badges = $("pad-badges");
+  badges.innerHTML = "";
+  const showScan = sc.phase !== "idle";
+  // Which pads to list: the ones being scanned, else the saved map's, else the form's choice.
+  const ids = showScan ? Object.keys(sc.pads) : savedPads ? Object.keys(s.arena.pads)
+    : Array.from({ length: padCount }, (_, i) => String(i + 1));
+  for (const k of ids) {
+    const p = showScan ? sc.pads[k] : null;
+    const b = document.createElement("span");
+    const seen = showScan ? p.seen : (savedPads ? 1 : 0);
+    b.className = "pad-badge" + (seen >= 2 || (!showScan && seen) ? " on" : seen ? " some" : "");
+    b.textContent = k + (showScan ? "：" + p.seen + "回" + (p.seen ? "・ズレ" + p.spread + "cm" : "") : "");
+    badges.appendChild(b);
+  }
+  if (showScan && sc.field) {
+    const pads = {};
+    for (const k of ids) pads[k] = sc.pads[k].center;
+    drawMap($("scan-map"), sc.field, pads, null,
+      [{ pos: running ? { x: sc.pose[0], y: sc.pose[1], heading: 0 } : null, cls: "me", label: "あなた" }]);
+  } else if (s.arena) {
+    drawMap($("scan-map"), s.arena.field, s.arena.pads, s.arena.starts, []);
+  } else {
+    $("scan-map").textContent = "まだ地図がありません";
+  }
+}
+
+function gestureWanted(s) {
+  const keys = s.start_at
+    ? [s.me && s.me.plan_key, s.local ? s.me_b && s.me_b.plan_key : null]
+    : [s.plan_key, s.local ? s.plan_key_b : null];
+  return keys.some((key) => key && (s.choices.find((c) => c.key === key) || {}).gesture);
 }
 
 function renderBattle(s) {
   const opponent = s.matching ? s.peers[0] : null;
   $("no-match").hidden = !!opponent;
   $("room").hidden = !opponent;
-  if (!opponent) return;
-  setPlayerCard("me", s.player, s.my_drone, s.ready);
+  $("room-part2").hidden = !opponent;
+  $("arena-status").hidden = !!s.start_at;
+  $("arena-sync").textContent = arenaSyncText(s, opponent);
+  if (!opponent) {
+    if (window.Gesture) Gesture.setVisible(false, false);
+    return;
+  }
+  setPlayerCard("me", s.local ? "A機" : s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
+  const whoLabels = document.querySelectorAll(".room-card .who");
+  whoLabels[0].textContent = s.local ? "1台目" : "あなた";
+  whoLabels[1].textContent = s.local ? "2台目" : "相手";
+  $("side-switch").hidden = !s.local;
+  if (!s.local) side = "A";
+  for (const b of document.querySelectorAll("#side-switch button")) b.classList.toggle("on", b.dataset.side === side);
+  $("start-help").textContent = s.local
+    ? "準備OKは1回だけ。押すと5秒後にA機とB機が同時に離陸します。"
+    : "2人とも準備OKになると5秒後に同時に離陸します。";
+  drawArena(s, opponent);
+  const simple = s.arena && s.arena.kind === "simple";
+  $("role-line").textContent = s.local
+    ? (simple ? `A機とB機を${s.arena.distance}cm離して、向かい合わせに置いてください（パッドなし）。`
+      : `A機をパッド${startPad(s.arena, "A")}、B機をパッド${startPad(s.arena, "B")}の中心に、向かい合わせに置いてください。`)
+    : "あなたは " + s.role + "側。" + (simple
+    ? `相手と${s.arena.distance}cm離して、相手の方を向けて置いてください（パッドなし）。`
+    : `地図の開始位置（A＝パッド${startPad(s.arena, "A")}、B＝パッド${startPad(s.arena, "B")}）に相手の方を向けて置いてください。`);
+  $("arena-kind-help").textContent = simple
+    ? "パッドなしモード：相手の位置は、お互いが送った移動命令から予想します。動くほどずれます。地図の外枠が飛行範囲です。"
+    : "パッドモード：地図は「フィールド」画面でドローンが飛んで測ったものです。パッドが見えると位置を直し、見えない間は移動命令から予想します。地図の外枠が飛行範囲です。";
   $("limit").textContent = s.battle_seconds;
-  $("log").textContent = s.me.log.join("\n");
+  $("log").textContent = (s.local ? ["【A機】", ...s.me.log, "【B機】", ...s.me_b.log] : s.me.log).join("\n");
 
   const started = !!s.start_at;
   const finished = !!s.result;
@@ -272,15 +496,18 @@ function renderBattle(s) {
 
   if (!started) {
     renderModes(s);
-    const chosen = s.choices.find((c) => c.key === s.plan_key);
-    const planText = chosen ? "作戦: " + chosen.title : "作戦を選んでください";
+    const chosen = s.choices.find((c) => c.key === planKey(s));
+    const label = (key) => (s.choices.find((c) => c.key === key) || {}).title;
+    const planText = s.local ? "A機: " + (label(s.plan_key) || "未選択") + " ／ B機: " + (label(s.plan_key_b) || "未選択")
+      : chosen ? "作戦: " + chosen.title : "作戦を選んでください";
     $("mode-list").classList.toggle("locked", s.ready);
     $("plan-list").classList.toggle("locked", s.ready);
     $("ready").textContent = s.ready ? "準備OKを取り消す" : "準備OK";
     $("ready").className = "big-button" + (s.ready ? " ghost" : "");
-    $("ready").disabled = !s.plan;
+    $("ready").disabled = !s.plan || (s.local && !s.plan_b) || (!s.ready && (!s.arena || opponent.arena_hash !== s.arena_hash));
     $("room-status").textContent = planText + " ／ " + (s.ready && opponent.ready ? "まもなくスタート！"
       : s.ready ? "相手の準備を待っています…" : "準備ができたら「準備OK」を押してください");
+    if (window.Gesture) Gesture.setVisible(gestureWanted(s), false);
     return;
   }
 
@@ -291,35 +518,50 @@ function renderBattle(s) {
   $("fight").hidden = left > 0;
   const elapsed = Math.max(0, s.now - s.start_at);
   $("timer").textContent = "残り " + Math.max(0, Math.ceil(s.battle_seconds - elapsed)) + " 秒";
+  const liveLabels = document.querySelectorAll(".live-grid > div > .muted:first-child");
+  liveLabels[0].textContent = s.local ? "A機" : "あなた";
+  liveLabels[1].textContent = s.local ? "B機" : "相手";
   $("me-state").textContent = droneState(s.me);
-  $("me-pad").textContent = padText(s.me);
   $("me-plan").textContent = s.me.plan ? "作戦: " + s.me.plan : "";
   $("op-state").textContent = droneState(opponent.battle);
-  $("op-pad").textContent = padText(opponent.battle);
   $("op-plan").textContent = opponent.battle && opponent.battle.plan ? "作戦: " + opponent.battle.plan : "";
-  const switcher = $("mode-switch");
-  const sig = JSON.stringify([s.choices, s.me.plan_key, s.me.phase]);
-  if (switcher.dataset.sig !== sig) {
-    switcher.dataset.sig = sig;
-    switcher.innerHTML = "";
+  // Mode buttons: one row for us, and in the 1-PC mode a second row for the B drone.
+  const fillSwitcher = (el, mine, sideName) => {
+    const sig = JSON.stringify([s.choices, mine.plan_key, mine.phase]);
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = "";
+    if (s.local) {
+      const tag = document.createElement("span");
+      tag.className = "muted";
+      tag.textContent = sideName + "機:";
+      el.appendChild(tag);
+    }
     for (const c of s.choices) {
       const b = document.createElement("button");
       b.textContent = c.title;
-      b.className = c.key === s.me.plan_key ? "" : "ghost";
-      b.disabled = s.me.phase !== "flying";
-      b.addEventListener("click", () => post("/api/mode", { key: c.key }).then(refresh));
-      switcher.appendChild(b);
+      b.className = c.key === mine.plan_key ? "" : "ghost";
+      b.disabled = mine.phase !== "flying";
+      b.addEventListener("click", () => post("/api/mode", { key: c.key, side: sideName }).then(refresh));
+      el.appendChild(b);
     }
-  }
-  $("surrender").disabled = !["starting", "flying"].includes(s.me.phase);
+  };
+  fillSwitcher($("mode-switch"), s.me, "A");
+  $("mode-switch-b").hidden = !s.local;
+  if (s.local) fillSwitcher($("mode-switch-b"), s.me_b, "B");
+  const up = (b) => ["starting", "flying"].includes(b.phase);
+  $("surrender").disabled = !(up(s.me) || (s.local && up(s.me_b)));
 
   if (finished) {
-    const titles = { win: "勝ち！", lose: "負け…", draw: "引き分け" };
+    const titles = s.local ? { win: "A機の勝ち！", lose: "B機の勝ち！", draw: "引き分け" }
+      : { win: "勝ち！", lose: "負け…", draw: "引き分け" };
     $("result-title").textContent = titles[s.result.outcome];
     $("result-title").className = "result-title " + s.result.outcome;
-    $("result-reason").textContent = s.result.reason;
-    $("rematch").disabled = ["starting", "flying"].includes(s.me.phase);
+    // The reasons are worded for player A: in the 1-PC mode "相手" is B and "自分" is A.
+    $("result-reason").textContent = s.local ? s.result.reason.replaceAll("相手", "B機").replaceAll("自分", "A機") : s.result.reason;
+    $("rematch").disabled = up(s.me) || (s.local && up(s.me_b));
   }
+  if (window.Gesture) Gesture.setVisible(gestureWanted(s) && !finished, !finished);
 }
 
 let started = false;  // no screen updates until a reload's reset has finished
@@ -332,11 +574,24 @@ async function refresh() {
   if (page === "drones") renderDrones(s);
   if (page === "peers") renderPeers(s);
   if (page === "battle") renderBattle(s);
-  if (page === "router") renderPads(s);
+  if (page === "field") renderField(s);
 }
 
 if (page === "drones") {
   $("scan").addEventListener("click", async () => { await post("/api/scan"); refresh(); });
+  $("gesture-go").addEventListener("click", async () => {
+    if (!confirm("自分の機体が離陸します。周りに人や物がないか確認しましたか？")) return;
+    const r = await post("/api/gesture-fly", { action: "start" });
+    $("gesture-fly-msg").textContent = r.ok ? "離陸します…" : r.message;
+    refresh();
+  });
+  $("gesture-land").addEventListener("click", () => post("/api/gesture-fly", { action: "land" }).then(refresh));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("gesture-land").hidden) {
+      e.preventDefault();
+      post("/api/gesture-fly", { action: "land" }).then(refresh);
+    }
+  });
 }
 if (page === "peers") {
   $("code").addEventListener("input", () => $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4));
@@ -346,13 +601,16 @@ if (page === "peers") {
       $("match-msg").textContent = "マッチが成立すると次へ進めます";
     }
   });
+  for (const b of document.querySelectorAll(".segment [data-local]")) {
+    b.addEventListener("click", () => showLocalMode(b.dataset.local === "1"));
+  }
   $("match").addEventListener("click", async () => {
     // Connecting to the drone takes up to a few seconds: show it, and block double clicks.
     $("match").disabled = true;
     $("match-msg").className = "msg";
-    $("match-msg").textContent = "ドローンにつないでいます…";
+    $("match-msg").textContent = localMode ? "2台のドローンにつないでいます…" : "ドローンにつないでいます…";
     const r = await post("/api/match", { player: $("player").value, sn: $("my-drone").value,
-                                         code: $("code").value });
+                                         code: $("code").value, local: localMode, sn_b: $("my-drone-b").value });
     $("match").disabled = false;
     $("match-msg").className = r.ok ? "msg" : "msg error";
     $("match-msg").textContent = r.ok ? "" : r.message;
@@ -364,9 +622,48 @@ if (page === "peers") {
     refresh();
   });
 }
+if (page === "field") {
+  for (const b of document.querySelectorAll(".segment [data-kind]")) {
+    b.addEventListener("click", () => { showFieldKind(b.dataset.kind); refresh(); });
+  }
+  for (const b of document.querySelectorAll(".segment [data-pads]")) {
+    b.addEventListener("click", () => { showPadCount(Number(b.dataset.pads)); refresh(); });
+  }
+  $("simple-save").addEventListener("click", async () => {
+    const value = (id) => $(id).value === "" ? null : Number($(id).value);
+    const r = await post("/api/arena/simple", { distance: value("s-distance"), back: value("s-back"), side: value("s-side") });
+    $("simple-msg").className = r.ok ? "msg ok-text" : "msg error";
+    $("simple-msg").textContent = r.ok ? "保存しました。相手のPCにも同じ設定が届きます。" : r.message;
+    refresh();
+  });
+  const stopScan = () => post("/api/arena/scan/stop").then(refresh);
+  $("scan-stop").addEventListener("click", stopScan);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("scan-stop").hidden) stopScan(); });
+  $("scan-start").addEventListener("click", async () => {
+    const value = (id) => $(id).value === "" ? null : Number($(id).value);
+    const body = { pads: padCount, back: value("b-back"), front: value("b-front"), far: value("b-far"), near: value("b-near") };
+    const origin = padCount === 4 ? 3 : 4;
+    if (Object.values(body).some((v) => v === null)) {
+      $("scan-msg").className = "msg error";
+      $("scan-msg").textContent = `4つの距離を全部入れてください（パッド${origin}から測ったcm）`;
+      return;
+    }
+    if (!confirm(`パッド${origin}の中心から離陸してスキャンします。周りに人や物がないか確認しましたか？`)) return;
+    $("scan-msg").className = "msg";
+    $("scan-msg").textContent = "離陸します…";
+    const r = await post("/api/arena/scan", body);
+    $("scan-msg").className = r.ok ? "msg" : "msg error";
+    $("scan-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  });
+  setInterval(refresh, 400);
+}
 if (page === "battle") {
-  for (const b of document.querySelectorAll(".segment button")) {
+  for (const b of document.querySelectorAll(".segment button[data-view]")) {
     b.addEventListener("click", () => showView(b.dataset.view));
+  }
+  for (const b of document.querySelectorAll("#side-switch button")) {
+    b.addEventListener("click", () => { side = b.dataset.side; view = null; $("mode-list").dataset.sig = ""; refresh(); });
   }
   $("import-file").addEventListener("change", () => {
     const file = $("import-file").files[0];
@@ -396,151 +693,6 @@ if (page === "battle") {
   });
   setInterval(refresh, 300);  // smoother countdown and live state
 }
-let padsReady = false;
-
-function renderPads(s) {
-  const body = $("pad-rows");
-  if (!body) return;
-  if (!padsReady) {
-    const byId = {};
-    for (const p of s.pads || []) byId[p.id] = p;
-    body.replaceChildren();
-    for (let id = 1; id <= 8; id++) {
-      const p = byId[id] || {};
-      const tr = document.createElement("tr");
-      tr.dataset.id = String(id);
-      const num = document.createElement("td");
-      num.className = "mono";
-      num.textContent = String(id);
-      tr.appendChild(num);
-      for (const value of [p.x, p.y, p.yaw]) {
-        const td = document.createElement("td");
-        const input = document.createElement("input");
-        input.inputMode = "numeric";
-        input.autocomplete = "off";
-        input.value = value == null ? "" : String(value);
-        td.appendChild(input);
-        tr.appendChild(td);
-      }
-      body.appendChild(tr);
-    }
-    padsReady = true;
-  }
-  const test = s.pad_test || {};
-  if (test.phase === "starting") shownFound = "";
-  applyFound(test.found || []);
-  renderPadTest(test);
-}
-
-let shownFound = "";
-
-function applyFound(found) {
-  const sig = JSON.stringify(found);
-  if (!found.length || sig === shownFound) return;
-  shownFound = sig;
-  for (const pad of found) {
-    const tr = [...$("pad-rows").rows].find((row) => row.dataset.id === String(pad.id));
-    if (!tr) continue;
-    const inputs = tr.querySelectorAll("input");
-    inputs[0].value = pad.x;
-    inputs[1].value = pad.y;
-    inputs[2].value = pad.yaw;
-  }
-}
-
-function sideText(cm) {
-  if (cm >= 0) return "ロケットの左 " + cm + "cm";
-  return "ロケットの右 " + (-cm) + "cm";
-}
-
-function alongText(cm) {
-  if (cm >= 0) return "ロケットの前方 " + cm + "cm";
-  return "ロケットの後方 " + (-cm) + "cm";
-}
-
-function renderPadTest(test) {
-  const live = $("pad-live");
-  const list = $("pad-found");
-  if (!live || !list) return;
-  const flying = ["starting", "flying", "landing"].includes(test.phase);
-  $("pad-hover").disabled = flying;
-  $("pad-scan").disabled = flying;
-  $("pad-span").disabled = flying;
-  $("pad-land").hidden = !flying;
-  $("pad-emergency").hidden = !flying;
-  $("pad-stick").hidden = !(test.phase === "flying" && test.mode === "hover");
-  if (test.message) $("pad-test-msg").textContent = test.message;
-  const seen = test.live;
-  if (flying && seen && seen.mid > 0 && seen.x != null) {
-    live.textContent = "パッド" + seen.mid + "を読んでいます（" + alongText(seen.x) + "・" + sideText(seen.y) + "・高さ " + seen.z + "cm）";
-  } else if (test.phase === "flying") {
-    live.textContent = "まだパッドは見えていません。パッドの真ん中の上空で読んでください";
-  } else if (!flying) {
-    live.textContent = "";
-  }
-  list.replaceChildren();
-  for (const pad of test.found || []) {
-    const item = document.createElement("li");
-    item.textContent = "パッド" + pad.id + ": 前 " + pad.x + "cm・右 " + pad.y + "cm・向き " + pad.yaw;
-    list.appendChild(item);
-  }
-}
-
-if (page === "router" && $("pad-save")) {
-  $("pad-save").addEventListener("click", async () => {
-    const rows = [];
-    for (const tr of $("pad-rows").rows) {
-      const [x, y, yaw] = [...tr.querySelectorAll("input")].map((input) => input.value.trim());
-      if (!x && !y && !yaw) continue;
-      rows.push({ id: Number(tr.dataset.id), x, y, yaw });
-    }
-    $("pad-msg").textContent = "保存しています…";
-    const r = await post("/api/pads", { pads: rows });
-    $("pad-msg").textContent = r.message;
-    if (!r.ok) return;
-    padsReady = false;
-    shownFound = "";
-    refresh();
-  });
-  $("pad-hover").addEventListener("click", async () => {
-    $("pad-test-msg").textContent = "離陸します…";
-    const r = await post("/api/pad-test", { action: "hover" });
-    $("pad-test-msg").textContent = r.message;
-    refresh();
-  });
-  $("pad-scan").addEventListener("click", async () => {
-    const span = Number($("pad-span").value);
-    $("pad-test-msg").textContent = "離陸します…";
-    const r = await post("/api/pad-test", { action: "scan", span });
-    $("pad-test-msg").textContent = r.message;
-    refresh();
-  });
-  $("pad-land").addEventListener("click", () => post("/api/pad-test", { action: "land" }).then(refresh));
-  $("pad-emergency").addEventListener("click", () => post("/api/pad-test", { action: "emergency" }).then(refresh));
-  $("pad-stick").addEventListener("click", async (event) => {
-    const command = event.target.closest("button")?.dataset.move;
-    if (!command) return;
-    const r = await post("/api/pad-test", { action: "move", command });
-    if (!r.ok) $("pad-test-msg").textContent = r.message;
-    refresh();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.target.closest("input, textarea")) return;
-    if ($("pad-stick").hidden) return;
-    const command = {
-      ArrowUp: "forward 30", ArrowDown: "back 30", ArrowLeft: "left 30", ArrowRight: "right 30",
-      q: "ccw 45", e: "cw 45", r: "up 20", f: "down 20",
-    }[event.key];
-    if (!command) return;
-    event.preventDefault();
-    post("/api/pad-test", { action: "move", command }).then((r) => {
-      if (!r.ok) $("pad-test-msg").textContent = r.message;
-    });
-  });
-  setInterval(refresh, 400);
-}
-
 if (page === "router" || page === "drones") {
   // Remember the Wi-Fi name (never the password) for the next Tello.
   try { $("ssid").value = localStorage.getItem("ssid") || ""; } catch (e) { /* storage blocked */ }

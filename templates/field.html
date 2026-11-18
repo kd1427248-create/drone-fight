@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="picker-head">
+    <h2>フィールドの種類</h2>
+    <div class="segment" role="tablist">
+      <button role="tab" data-kind="pads" class="on">パッドで正確に</button>
+      <button role="tab" data-kind="simple">パッドなし（予測）</button>
+    </div>
+  </div>
+  <p class="muted" style="margin:0" id="kind-note"></p>
+</section>
+
+<section class="card" id="simple-card" hidden>
+  <h2>パッドなしで戦う</h2>
+  <p style="margin-top:0">ミッションパッドを使わず、2台を決まった距離で向かい合わせに置いて戦います。相手の位置は、お互いが送った移動命令から<b>予想</b>するので、動くほどずれていきます。</p>
+  <ol class="steps-list">
+    <li>A機とB機を、下に入れた<b>距離だけ離して、相手の方を向けて</b>置く。</li>
+    <li>それぞれの機体の<b>後ろ</b>と、2台を結ぶ線から<b>左右</b>に、何cmまで安全に飛べるかを入れる。この長方形の外には出ません。</li>
+  </ol>
+  <div class="bounds">
+    <label>2台の距離<input id="s-distance" type="number" min="100" max="500" step="10" placeholder="cm"></label>
+    <label>それぞれの後ろの余裕<input id="s-back" type="number" min="50" max="300" step="10" placeholder="cm"></label>
+    <label>左右の余裕<input id="s-side" type="number" min="50" max="300" step="10" placeholder="cm"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="simple-save">この設定で保存</button>
+    <span class="msg" id="simple-msg"></span>
+  </div>
+</section>
+
+<section class="card" id="pads-card">
+  <div class="picker-head">
+    <h2>フィールドをスキャンする（最初に1回）</h2>
+    <div class="segment" role="tablist" aria-label="パッドの枚数">
+      <button role="tab" data-pads="4" class="on">4枚（正方形）</button>
+      <button role="tab" data-pads="8">8枚</button>
+    </div>
+  </div>
+  <p style="margin-top:0">自分のドローンがパッドの上を飛んで、<span class="pad-count">4</span>枚の位置を実際に測って地図を作ります。写真はいりません。</p>
+  <ol class="steps-list" data-for="4">
+    <li>パッドを<b>奥から「1 2 ／ 3 4」</b>の並びで、<b>数字の面を上</b>にして床に置く。パッド同士の間隔は100〜120cmが目安（正方形の大きさは測って把握します）。</li>
+    <li><b>ロケットの絵を4枚とも同じ向き</b>にそろえる（パッド3から4の方へ向く向き）。</li>
+    <li>自分のドローンを<b>パッド3の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく（対戦のときはA機がパッド3、B機がパッド4）。</li>
+    <li>パッド3から測って、<b>壁・人・家具にぶつからずに飛べる距離</b>を下に入れる。この長方形の外には出ません。</li>
+  </ol>
+  <ol class="steps-list" data-for="8" hidden>
+    <li>パッドを<b>奥から「1 2 3 ／ 4 5 6 ／ 7 8」</b>の並びで、<b>数字の面を上</b>にして床に置く。間隔は自由。</li>
+    <li><b>ロケットの絵を8枚とも同じ向き</b>にそろえる（パッド4から6の方へ向く向き）。パッド4と6は<b>100cm以上</b>離す。</li>
+    <li>自分のドローンを<b>パッド4の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく（対戦のときはA機がパッド4、B機がパッド6）。</li>
+    <li>パッド4から測って、<b>壁・人・家具にぶつからずに飛べる距離</b>を下に入れる。この長方形の外には出ません。</li>
+  </ol>
+  <div class="bounds">
+    <label>後ろ（ロケットと反対）<input id="b-back" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>前（ロケットの向き）<input id="b-front" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>奥（<span class="far-pads">パッド1・2</span>の側）<input id="b-far" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>手前<span class="near-note">（パッドはありません。安全な余白）</span><input id="b-near" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="scan-start" class="big-button">スキャン開始（離陸します）</button>
+    <button id="scan-stop" class="stop big-button" hidden>停止して着陸</button>
+    <span class="msg" id="scan-msg"></span>
+  </div>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">高さ100cm・秒速60cmで、範囲の中を往復しながらパッドを読みます。全部のパッドが2回以上見えて位置がそろったらすぐ終わり、スタートしたパッドへ戻ります。広さに合わせた時間の上限があり（最大6分）、戻ったときのズレが30cm以内のときだけ保存します。どれか1つでもだめなら着陸して保存しません。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
+</section>
+
+<section class="card arena">
+  <div class="arena-map" id="scan-map"></div>
+  <div class="arena-help">
+    <h2 id="scan-title">まだスキャンしていません</h2>
+    <p id="scan-progress" class="muted"></p>
+    <div class="pad-badges" id="pad-badges"></div>
+    <p id="scan-sync" class="muted"></p>
+    <details>
+      <summary class="muted">スキャンの記録</summary>
+      <pre class="mono muted" id="scan-log" style="white-space:pre-wrap;margin:8px 0 0"></pre>
+    </details>
+  </div>
+</section>
+{% endblock %}
