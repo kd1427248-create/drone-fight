@@ -1,10 +1,9 @@
-/* Lean the fleeing drone: the laptop camera watches shoulders and nose. */
+/* Move the drone with one hand: the laptop camera watches the wrist. */
 const Gesture = (() => {
-  const ON = 0.2;
-  const OFF = 0.11;
-  const NOSE = 0;
-  const L_SHOULDER = 11;
-  const R_SHOULDER = 12;
+  const ON = 1.0;   // palm-widths from where the hand was held still
+  const OFF = 0.55;
+  const WRIST = 0;
+  const MIDDLE = 9;
 
   let shown = false;
   let live = false;
@@ -36,23 +35,14 @@ const Gesture = (() => {
     return samples.reduce((sum, sample) => sum + sample[key], 0) / samples.length;
   }
 
-  function bodyOf(landmarks) {
-    if (!landmarks || landmarks.length < 13) return null;
-    const nose = landmarks[NOSE];
-    const left = landmarks[L_SHOULDER];
-    const right = landmarks[R_SHOULDER];
-    const visible = (point) => point && (point.visibility == null || point.visibility >= 0.5);
-    if (![nose, left, right].every(visible)) return null;
-    const shoulderW = Math.hypot(right.x - left.x, right.y - left.y);
-    if (shoulderW < 0.05) return null;
-    const sx = (left.x + right.x) / 2;
-    const sy = (left.y + right.y) / 2;
-    return {
-      // The camera faces the player, so their right is the left side of the image.
-      rightAmount: (sx - nose.x) / shoulderW,
-      headUp: (sy - nose.y) / shoulderW,
-      shoulderW,
-    };
+  function handOf(landmarks) {
+    if (!landmarks || landmarks.length < 10) return null;
+    const wrist = landmarks[WRIST];
+    const middle = landmarks[MIDDLE];
+    if (!wrist || !middle) return null;
+    const size = Math.hypot(middle.x - wrist.x, middle.y - wrist.y);
+    if (size < 0.02) return null;
+    return { x: wrist.x, y: wrist.y, size };
   }
 
   function classify(sample) {
@@ -64,16 +54,18 @@ const Gesture = (() => {
       samples.push(sample);
       if (samples.length >= 12) {
         const spread = (key) => Math.max(...samples.map((s) => s[key])) - Math.min(...samples.map((s) => s[key]));
-        if (spread("rightAmount") > 0.12 || spread("headUp") > 0.12) samples = samples.slice(-4);
+        if (spread("x") > 0.03 || spread("y") > 0.03) samples = samples.slice(-4);
         else {
-          base = { rightAmount: average("rightAmount"), headUp: average("headUp"), shoulderW: average("shoulderW") };
+          base = { x: average("x"), y: average("y"), size: average("size") };
           samples = [];
         }
       }
       return { right: 0, forward: 0, seen: true, ready: false };
     }
-    const dRight = sample.rightAmount - base.rightAmount;
-    const dForward = (base.headUp - sample.headUp) * 0.7 + (sample.shoulderW / base.shoulderW - 1);
+    // The camera faces the player, so their right is the left side of the image.
+    // A hand raised in the picture is "forward".
+    const dRight = (base.x - sample.x) / base.size;
+    const dForward = (base.y - sample.y) / base.size;
     const right = axis(dRight, prev.right);
     const forward = axis(dForward, prev.forward);
     prev = { right, forward };
@@ -81,21 +73,21 @@ const Gesture = (() => {
   }
 
   function leanText(right, forward) {
-    const way = (forward > 0 ? "前" : forward < 0 ? "後ろ" : "") + (right > 0 ? "右" : right < 0 ? "左" : "");
-    return way ? way + "に傾いています" : "まっすぐです";
+    const way = (forward > 0 ? "上" : forward < 0 ? "下" : "") + (right > 0 ? "右" : right < 0 ? "左" : "");
+    return way ? "手を" + way + "に出しています" : "手が止まっています";
   }
 
   function showStatus(lean) {
     const el = statusEl();
     if (!el) return;
     let text;
-    if (!lean.seen) text = "顔と肩が映るようにしてください";
-    else if (!lean.ready) text = "まっすぐな姿勢で、少し止まってください";
+    if (!lean.seen) text = "片手をカメラに映してください";
+    else if (!lean.ready) text = "手を前に出して、少し止まってください";
     else text = leanText(lean.right, lean.forward);
     if (live && lean.ready && lean.seen) {
       text += lean.right || lean.forward ? "。この方向へ一歩ずつ動きます" : "。止まっています";
     } else if (!live && lean.ready) {
-      text += "。離陸すると、この傾きで動きます";
+      text += "。離陸すると、この手の位置で動きます";
     }
     el.textContent = text;
   }
@@ -127,7 +119,7 @@ const Gesture = (() => {
         const found = landmarker.detectForVideo(cam, nowStamp());
         landmarks = found.landmarks && found.landmarks[0];
       } catch (e) { /* a dropped frame is just a miss */ }
-      const lean = classify(bodyOf(landmarks));
+      const lean = classify(handOf(landmarks));
       showStatus(lean);
       send(lean);
     }
@@ -141,13 +133,13 @@ const Gesture = (() => {
       loading = (async () => {
         const vision = await import("/static/vendor/pose/vision_bundle.mjs");
         const files = await vision.FilesetResolver.forVisionTasks("/static/vendor/pose/wasm");
-        landmarker = await vision.PoseLandmarker.createFromOptions(files, {
+        landmarker = await vision.HandLandmarker.createFromOptions(files, {
           baseOptions: {
-            modelAssetPath: "/static/vendor/pose/pose_landmarker_lite.task",
+            modelAssetPath: "/static/vendor/pose/hand_landmarker.task",
             delegate: "CPU",
           },
           runningMode: "VIDEO",
-          numPoses: 1,
+          numHands: 1,
         });
       })();
     }
@@ -192,7 +184,7 @@ const Gesture = (() => {
     const el = statusEl();
     if (button) button.disabled = true;
     if (view) view.hidden = false;
-    if (el) el.textContent = "カメラと体の認識を準備しています…";
+    if (el) el.textContent = "カメラと手の認識を準備しています…";
     try {
       await ensureModel();
       stream = await navigator.mediaDevices.getUserMedia({
@@ -206,7 +198,7 @@ const Gesture = (() => {
       if (el) {
         el.textContent = e && e.name === "NotAllowedError"
           ? "カメラが許可されていません。ブラウザの許可を確認してください"
-          : (landmarker ? "カメラを使えませんでした" : "体の認識を読み込めませんでした");
+          : (landmarker ? "カメラを使えませんでした" : "手の認識を読み込めませんでした");
       }
       stream && stream.getTracks().forEach((track) => track.stop());
       stream = null;
@@ -232,7 +224,7 @@ const Gesture = (() => {
       button.disabled = false;
       button.textContent = "カメラをオフ";
     }
-    if (el) el.textContent = "顔と肩が映るようにしてください";
+    if (el) el.textContent = "片手をカメラに映してください";
     if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(tick);
     else setTimeout(tick, 120);
   }

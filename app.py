@@ -17,6 +17,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
+import gesture_fly
 import scan
 import arena
 import plans
@@ -79,6 +80,8 @@ runner2.opponent_raw = lambda: (runner.public().get("pos"), 0.0)
 # Closing the app must never leave a drone flying.
 atexit.register(runner.shutdown)
 atexit.register(runner2.shutdown)
+practice = gesture_fly.GestureFlight(runner.tello_port)
+atexit.register(practice.shutdown)
 lock = threading.Lock()
 
 
@@ -235,6 +238,7 @@ def api_state():
         missing=missing_setup(),
         player=tello_net.load_settings().get("player", ""),
         my_drone=my_drone(),
+        gesture_fly=practice.public(),
         **snapshot,
     )
 
@@ -492,6 +496,28 @@ def api_gesture():
     for who in (runner, runner2):
         if who.phase in ("starting", "flying") and battle.uses_gesture(who.plan):
             who.set_lean(right, forward)
+    if practice.phase in ("starting", "flying"):
+        practice.set_lean(right, forward)
+    return jsonify(ok=True)
+
+
+@app.post("/api/gesture-fly")
+def api_gesture_fly():
+    """Take off the player's drone and step where they lean. No match, no second drone."""
+    body = request.get_json(silent=True) or {}
+    if body.get("action") == "land":
+        practice.land()
+        return jsonify(ok=True)
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="バトル中は試せません")
+    if scanner.active:
+        return jsonify(ok=False, message="フィールドのスキャン中です")
+    drone = my_drone()
+    if not drone or not drone.get("ip"):
+        return jsonify(ok=False, message="先に「自分の機体にする」を押してください")
+    message = practice.start(drone["ip"], drone.get("battery"))
+    if message:
+        return jsonify(ok=False, message=message)
     return jsonify(ok=True)
 
 
@@ -518,7 +544,7 @@ def api_reset():
     Drone nicknames, the player name and imported files stay. Nothing is reset
     while the drone is in the air.
     """
-    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying") or practice.phase in ("starting", "flying"):
         return jsonify(ok=False, message="飛んでいる間はリセットしません")
     runner.reset()
     runner2.reset()

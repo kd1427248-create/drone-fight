@@ -128,6 +128,29 @@ def tello_ssid(ip: str) -> str | None:
     return ssid_from_mac(mac) if mac else None
 
 
+# How many addresses to nudge at once. The whole /24 at once fills the ARP
+# cache with unfinished entries and the Tellos get pushed out before we look.
+ARP_CHUNK = 32
+
+
+def remember_tellos(found: dict[str, str], table: dict[str, str], targets: set[str]) -> None:
+    """Keep every Tello MAC seen so far. A later ARP dump may have dropped it."""
+    for ip, mac in table.items():
+        if ip in targets and mac[:8] in TELLO_OUIS:
+            found[ip] = mac
+
+
+def probe_order(targets: list[str], resolved: set[str]) -> list[str]:
+    """Refresh addresses we already know, then walk the rest from the top.
+
+    School Wi-Fi hands out the higher addresses. Starting at .1 fills the ARP
+    cache with empty slots and a drone near the top never gets one.
+    """
+    known = [ip for ip in targets if ip in resolved]
+    rest = [ip for ip in reversed(targets) if ip not in resolved]
+    return known + rest
+
+
 def scan(hosts: list[str] | None = None, wait: float = 2.5, port: int = TELLO_PORT) -> list[dict]:
     """List the Tellos on this network WITHOUT talking to them.
 
@@ -145,22 +168,32 @@ def scan(hosts: list[str] | None = None, wait: float = 2.5, port: int = TELLO_PO
         return probe(hosts, wait, port)  # testing: fake Tellos that have no real MAC
     network = ipaddress.ip_network(f"{me}/24", strict=False)
     targets = [str(h) for h in network.hosts() if str(h) != me]
+    target_set = set(targets)
+    table = arp_table()
+    found: dict[str, str] = {}
+    remember_tellos(found, table, target_set)
+    ordered = probe_order(targets, set(table))
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    step = wait / 8
     try:
-        for _ in range(2):  # the first packet can be dropped while ARP resolves
-            for host in targets:
-                try:
-                    sock.sendto(b"", (host, 9))  # port 9 = discard; Tellos ignore it
-                except OSError:
-                    pass
-            time.sleep(wait / 2)
+        for start in range(0, len(ordered), ARP_CHUNK):
+            chunk = ordered[start:start + ARP_CHUNK]
+            for _ in range(2):  # the first packet can be dropped while ARP resolves
+                for host in chunk:
+                    try:
+                        sock.sendto(b"", (host, 9))  # port 9 = discard; Tellos ignore it
+                    except OSError:
+                        pass
+                time.sleep(step)
+            remember_tellos(found, arp_table(), target_set)
     finally:
         sock.close()
+    time.sleep(step)
+    remember_tellos(found, arp_table(), target_set)
     drones = []
-    for ip, mac in sorted(arp_table().items(), key=lambda item: ipaddress.ip_address(item[0])):
-        if mac[:8] in TELLO_OUIS and ip in targets:
-            ssid = ssid_from_mac(mac)
-            drones.append({"ip": ip, "sn": ssid, "ssid": ssid, "battery": None, "serial": None})
+    for ip, mac in sorted(found.items(), key=lambda item: ipaddress.ip_address(item[0])):
+        ssid = ssid_from_mac(mac)
+        drones.append({"ip": ip, "sn": ssid, "ssid": ssid, "battery": None, "serial": None})
     return drones
 
 

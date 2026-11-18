@@ -32,6 +32,15 @@ function renderHeader(s) {
 function renderDrones(s) {
   // On a Tello's own Wi-Fi, offer the router setup right here.
   $("join-card").hidden = !(s.mode === "direct" && s.drones.length);
+  const fly = s.gesture_fly || { phase: "idle", message: "" };
+  const flying = fly.phase === "starting" || fly.phase === "flying";
+  if ($("gesture-card")) {
+    $("gesture-card").hidden = !s.my_drone;
+    $("gesture-fly-msg").textContent = fly.message || "";
+    $("gesture-go").hidden = flying;
+    $("gesture-land").hidden = !flying;
+    if (window.Gesture) Gesture.setVisible(!!s.my_drone, flying);
+  }
   $("scan").disabled = s.scanning;
   $("scan-msg").textContent = s.message + (s.scanned_at ? "（" + s.scanned_at + "）" : "");
   if (editing) return;
@@ -570,6 +579,19 @@ async function refresh() {
 
 if (page === "drones") {
   $("scan").addEventListener("click", async () => { await post("/api/scan"); refresh(); });
+  $("gesture-go").addEventListener("click", async () => {
+    if (!confirm("自分の機体が離陸します。周りに人や物がないか確認しましたか？")) return;
+    const r = await post("/api/gesture-fly", { action: "start" });
+    $("gesture-fly-msg").textContent = r.ok ? "離陸します…" : r.message;
+    refresh();
+  });
+  $("gesture-land").addEventListener("click", () => post("/api/gesture-fly", { action: "land" }).then(refresh));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("gesture-land").hidden) {
+      e.preventDefault();
+      post("/api/gesture-fly", { action: "land" }).then(refresh);
+    }
+  });
 }
 if (page === "peers") {
   $("code").addEventListener("input", () => $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4));
